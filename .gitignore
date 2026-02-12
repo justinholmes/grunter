@@ -1,0 +1,15 @@
+# Binary
+grunter
+
+# IDE
+.idea/
+
+# OS
+.DS_Store
+
+# Terraform/Terragrunt
+.terraform/
+.terragrunt-cache/
+*.tfstate
+*.tfstate.backup
+.terraform.lock.hcl

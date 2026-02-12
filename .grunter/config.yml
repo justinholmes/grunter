@@ -1,0 +1,6 @@
+deploy_branch: main
+tf_binary: opentofu
+tg_binary: terragrunt
+ignore:
+  - "**/.terraform.lock.hcl"
+  - "**/README.md"

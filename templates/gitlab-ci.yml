@@ -1,0 +1,58 @@
+stages:
+  - detect
+  - plan
+  - apply
+
+variables:
+  GRUNTER_CONFIG: ".grunter/config.yml"
+
+# Detect changed units and output execution plan
+detect:
+  stage: detect
+  image: ${GRUNTER_IMAGE:-ghcr.io/justinholmes/grunter:latest}
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  script:
+    - grunter orchestrate --config "$GRUNTER_CONFIG" -o execution-plan.json
+  artifacts:
+    paths:
+      - execution-plan.json
+    expire_in: 1 day
+
+# Run terragrunt plan on each changed unit and post results to MR
+plan:
+  stage: plan
+  image: ${GRUNTER_IMAGE:-ghcr.io/justinholmes/grunter:latest}
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  needs:
+    - detect
+  script:
+    - |
+      # Read each unit from the execution plan and run plan
+      for unit in $(jq -r '.layers[].units[].path' execution-plan.json); do
+        echo "Planning: $unit"
+        grunter execute plan "$unit" --config "$GRUNTER_CONFIG" -o "plan-${unit//\//-}.txt" || true
+        grunter comment \
+          --input "plan-${unit//\//-}.txt" \
+          --unit "$unit" \
+          --action plan \
+          --config "$GRUNTER_CONFIG"
+      done
+
+# Run terragrunt apply on merge to deploy branch
+apply:
+  stage: apply
+  image: ${GRUNTER_IMAGE:-ghcr.io/justinholmes/grunter:latest}
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  needs:
+    - detect
+  script:
+    - |
+      # Read each unit from the execution plan and apply in order
+      for unit in $(jq -r '.layers[].units[].path' execution-plan.json); do
+        echo "Applying: $unit"
+        grunter execute apply "$unit" --config "$GRUNTER_CONFIG"
+      done

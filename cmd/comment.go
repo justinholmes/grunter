@@ -1,0 +1,86 @@
+package cmd
+
+import (
+	"fmt"
+	"io"
+	"os"
+
+	"github.com/justinholmes/grunter/internal/gitlab"
+	"github.com/justinholmes/grunter/internal/plan"
+	"github.com/spf13/cobra"
+)
+
+var commentCmd = &cobra.Command{
+	Use:   "comment",
+	Short: "Post plan/apply results to a GitLab MR",
+	Long:  "Reads plan or apply output and posts it as a formatted markdown comment on the GitLab Merge Request.",
+	RunE:  runComment,
+}
+
+func init() {
+	commentCmd.Flags().String("input", "", "read output from file (default: stdin)")
+	commentCmd.Flags().String("unit", "", "unit path for the comment header")
+	commentCmd.Flags().String("action", "plan", "action type: plan or apply")
+	commentCmd.Flags().String("project-id", "", "GitLab project ID (default: CI_PROJECT_ID)")
+	commentCmd.Flags().String("mr-iid", "", "MR IID (default: CI_MERGE_REQUEST_IID)")
+	commentCmd.Flags().String("gitlab-url", "", "GitLab URL (default: CI_SERVER_URL or https://gitlab.com)")
+	rootCmd.AddCommand(commentCmd)
+}
+
+func runComment(cmd *cobra.Command, args []string) error {
+	inputPath, _ := cmd.Flags().GetString("input")
+	unitPath, _ := cmd.Flags().GetString("unit")
+	action, _ := cmd.Flags().GetString("action")
+
+	var content []byte
+	var err error
+	if inputPath != "" {
+		content, err = os.ReadFile(inputPath)
+		if err != nil {
+			return fmt.Errorf("reading input: %w", err)
+		}
+	} else {
+		content, err = io.ReadAll(os.Stdin)
+		if err != nil {
+			return fmt.Errorf("reading stdin: %w", err)
+		}
+	}
+
+	formatted := plan.FormatComment(unitPath, action, string(content))
+
+	projectID, _ := cmd.Flags().GetString("project-id")
+	if projectID == "" {
+		projectID = os.Getenv("CI_PROJECT_ID")
+	}
+	mrIID, _ := cmd.Flags().GetString("mr-iid")
+	if mrIID == "" {
+		mrIID = os.Getenv("CI_MERGE_REQUEST_IID")
+	}
+	gitlabURL, _ := cmd.Flags().GetString("gitlab-url")
+	if gitlabURL == "" {
+		gitlabURL = os.Getenv("CI_SERVER_URL")
+	}
+	if gitlabURL == "" {
+		gitlabURL = "https://gitlab.com"
+	}
+
+	token := os.Getenv("GITLAB_TOKEN")
+	if token == "" {
+		token = os.Getenv("CI_JOB_TOKEN")
+	}
+	if token == "" {
+		return fmt.Errorf("GITLAB_TOKEN or CI_JOB_TOKEN must be set")
+	}
+
+	if projectID == "" || mrIID == "" {
+		return fmt.Errorf("project-id and mr-iid are required (set flags or CI_PROJECT_ID/CI_MERGE_REQUEST_IID)")
+	}
+
+	client := gitlab.NewClient(gitlabURL, token)
+	if err := client.PostOrUpdateComment(projectID, mrIID, unitPath, formatted); err != nil {
+		return fmt.Errorf("posting comment: %w", err)
+	}
+
+	fmt.Fprintf(os.Stderr, "Comment posted for %s\n", unitPath)
+	return nil
+}
