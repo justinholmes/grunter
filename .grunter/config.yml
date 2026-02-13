@@ -17,6 +17,8 @@ ignore:
 #     path: envs/staging
 #     regions:
 #       - us-east-1
+#     # Destroy protection — block all destroys in staging
+#     # max_destroy: 0
 #     # RFC verification (GitLab-based)
 #     rfc:
 #       source: gitlab
@@ -35,6 +37,8 @@ ignore:
 #       - us-east-1
 #       - eu-west-1
 #     approval_group: platform-approvers
+#     # Destroy protection — allow up to 5 destroys per unit
+#     # max_destroy: 5
 #     # RFC verification (ServiceNow-based)
 #     rfc:
 #       source: servicenow

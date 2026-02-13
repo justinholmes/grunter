@@ -124,7 +124,7 @@ func runPromote(cmd *cobra.Command, args []string) error {
 	if pipelineMode {
 		// Skip canary gate in child pipeline when stages are split
 		includeCanaryGate := !canaryOnly && !afterCanaryOnly
-		yaml := generatePipelineYAML(&deployPlan, cfgPath, includeCanaryGate)
+		yaml := generatePipelineYAML(&deployPlan, cfg, cfgPath, includeCanaryGate)
 		outPath, _ := cmd.Flags().GetString("output")
 		if outPath != "" {
 			return os.WriteFile(outPath, []byte(yaml), 0644)

@@ -373,6 +373,33 @@ environments:
       next_window_field: next_open_at    # optional — ISO 8601 timestamp
 ```
 
+### Destroy protection (optional)
+
+Limit the number of resources a single unit can destroy during deployment. This prevents accidental infrastructure deletion when modules are renamed, removed, or refactored.
+
+```yaml
+environments:
+  - name: dev
+    path: envs/dev
+    # no max_destroy — anything goes
+  - name: staging
+    path: envs/staging
+    max_destroy: 0          # block ALL destroys
+  - name: prod
+    path: envs/prod
+    max_destroy: 5          # allow up to 5 resource destroys per unit
+```
+
+When `max_destroy` is set, `grunter promote --pipeline` injects a `grunter execute plan` + `grunter plan-check` step before each `grunter execute apply` in the generated child pipeline. If the plan would destroy more resources than the limit, the job fails.
+
+To override in an emergency, pass `--allow-destroy` to `plan-check`:
+
+```bash
+grunter plan-check --env prod --input plan-output.txt --config .grunter/config.yml --allow-destroy
+```
+
+When `max_destroy` is omitted (nil), no check is performed and the pipeline runs apply directly as before.
+
 ### OIDC ID tokens (optional)
 
 Custom RFC and deployment window APIs can authenticate using GitLab CI [ID tokens](https://docs.gitlab.com/ci/secrets/id_token_authentication/) (OIDC JWTs) instead of stored secrets. Set `auth_type: id_token` and `grunter init` will generate the `id_tokens` stanza on the approval job automatically:

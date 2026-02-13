@@ -834,6 +834,81 @@ environments:
 	}
 }
 
+func TestLoad_ParsesMaxDestroy(t *testing.T) {
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "config.yml")
+
+	content := `
+environments:
+  - name: dev
+    path: envs/dev
+  - name: staging
+    path: envs/staging
+    max_destroy: 0
+  - name: prod
+    path: envs/prod
+    max_destroy: 5
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// dev: omitted → nil
+	dev := cfg.GetEnvironment("dev")
+	if dev.MaxDestroy != nil {
+		t.Error("expected dev MaxDestroy to be nil")
+	}
+	if dev.HasDestroyProtection() {
+		t.Error("expected dev HasDestroyProtection to be false")
+	}
+
+	// staging: 0 → pointer to 0
+	staging := cfg.GetEnvironment("staging")
+	if staging.MaxDestroy == nil {
+		t.Fatal("expected staging MaxDestroy to be non-nil")
+	}
+	if *staging.MaxDestroy != 0 {
+		t.Errorf("expected staging MaxDestroy=0, got %d", *staging.MaxDestroy)
+	}
+	if !staging.HasDestroyProtection() {
+		t.Error("expected staging HasDestroyProtection to be true")
+	}
+
+	// prod: 5
+	prod := cfg.GetEnvironment("prod")
+	if prod.MaxDestroy == nil {
+		t.Fatal("expected prod MaxDestroy to be non-nil")
+	}
+	if *prod.MaxDestroy != 5 {
+		t.Errorf("expected prod MaxDestroy=5, got %d", *prod.MaxDestroy)
+	}
+}
+
+func TestValidate_MaxDestroy_Negative(t *testing.T) {
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "config.yml")
+
+	content := `
+environments:
+  - name: dev
+    path: envs/dev
+    max_destroy: -1
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Load(cfgPath)
+	if err == nil {
+		t.Fatal("expected error for negative max_destroy")
+	}
+}
+
 func TestValidate_DeploymentWindow_InvalidDay(t *testing.T) {
 	tmp := t.TempDir()
 	cfgPath := filepath.Join(tmp, "config.yml")

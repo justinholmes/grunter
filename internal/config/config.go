@@ -83,6 +83,7 @@ type Environment struct {
 	Path             string            `yaml:"path"`
 	Regions          []string          `yaml:"regions"`
 	ApprovalGroup    string            `yaml:"approval_group,omitempty"`
+	MaxDestroy       *int              `yaml:"max_destroy,omitempty"`
 	RFC              *RFCConfig        `yaml:"rfc,omitempty"`
 	DeploymentWindow *DeploymentWindow `yaml:"deployment_window,omitempty"`
 }
@@ -95,6 +96,11 @@ func (e Environment) RequiresRFCCheck() bool {
 // HasDeploymentWindow returns true if the environment has a deployment window configured.
 func (e Environment) HasDeploymentWindow() bool {
 	return e.DeploymentWindow != nil
+}
+
+// HasDestroyProtection returns true if the environment has a max_destroy limit configured.
+func (e Environment) HasDestroyProtection() bool {
+	return e.MaxDestroy != nil
 }
 
 // IsMultiRegion returns true if the environment has more than one region.
@@ -139,6 +145,10 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("duplicate environment name %q", env.Name)
 		}
 		seen[env.Name] = true
+
+		if env.MaxDestroy != nil && *env.MaxDestroy < 0 {
+			return fmt.Errorf("environment %q: max_destroy must be >= 0", env.Name)
+		}
 
 		if err := validateRFCConfig(env.Name, env.RFC); err != nil {
 			return err
