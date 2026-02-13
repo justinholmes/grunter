@@ -190,6 +190,34 @@ Output:
 
 For multi-region environments, the first region is the canary (`is_canary: true`). CI pipelines can gate between canary and full rollout.
 
+### `grunter rfc-check`
+
+Verify that a deployment has an approved RFC/change request before proceeding. Used as a gate before environment deployments in CI.
+
+```bash
+grunter rfc-check --env staging [--project-id 123] [--mr-iid 1] [--gitlab-url https://gitlab.example.com] [--skip-window]
+```
+
+| Flag | Default | Env var fallback |
+|------|---------|-----------------|
+| `--env` | — | — |
+| `--project-id` | — | `CI_PROJECT_ID` |
+| `--mr-iid` | — | `CI_MERGE_REQUEST_IID` |
+| `--gitlab-url` | `https://gitlab.com` | `CI_SERVER_URL` |
+| `--change-number` | — | configured via `change_number_var` in config |
+| `--skip-window` | `false` | — |
+
+Requires `GITLAB_TOKEN` or `CI_JOB_TOKEN` for GitLab source, or `SERVICENOW_USERNAME` + `SERVICENOW_PASSWORD` for ServiceNow source.
+
+**GitLab source** checks:
+- MR has the `approved_label` (e.g. `rfc-approved`)
+- If `issue_approved_label` is set, a linked issue has that label (e.g. `status::approved`)
+- If `emergency_label` is set and present on the MR, deployment window checks are bypassed
+
+**Post-merge pipelines**: when `CI_MERGE_REQUEST_IID` is unavailable, the checker looks up the MR from `CI_COMMIT_SHA` automatically.
+
+**Environments without RFC config** pass through with exit code 0.
+
 ## Configuration
 
 Default config path: `.grunter/config.yml` (override with `--config`).
@@ -230,8 +258,53 @@ When environments are defined:
 - `grunter drift --env dev` scopes drift detection
 - `grunter envdiff dev prod` shows cross-environment differences
 - `grunter promote` generates progressive deployment plans with canary stages
+- `grunter rfc-check --env staging` verifies RFC approval before deployment
 
 When no environments are defined, all existing commands work unchanged.
+
+### RFC verification (optional)
+
+Add `rfc` to an environment to gate deployments on change request approval.
+
+**GitLab-based** (labels + linked issues):
+
+```yaml
+environments:
+  - name: staging
+    path: envs/staging
+    rfc:
+      source: gitlab
+      approved_label: rfc-approved             # required — MR must have this label
+      issue_approved_label: "status::approved"  # optional — a linked issue must have this label
+      emergency_label: emergency                # optional — bypasses deployment window
+```
+
+**ServiceNow-based**:
+
+```yaml
+environments:
+  - name: prod
+    path: envs/prod
+    rfc:
+      source: servicenow
+      instance_url: https://myco.service-now.com
+      change_number_var: SNOW_CHG_NUMBER  # env var containing the change number
+```
+
+### Deployment windows (optional)
+
+Restrict deployments to specific days and times. Emergency RFCs bypass this check.
+
+```yaml
+environments:
+  - name: prod
+    path: envs/prod
+    deployment_window:
+      days: [monday, tuesday, wednesday, thursday, friday]
+      start: "09:00"
+      end: "17:00"
+      timezone: America/New_York
+```
 
 ## GitLab CI template
 
@@ -287,7 +360,9 @@ GitLab integration tests (require a running GitLab instance):
 export GRUNTER_TEST_GITLAB_URL=http://localhost:8929
 export GRUNTER_TEST_GITLAB_TOKEN=glpat-...
 go test -tags=integration -timeout 10m ./test/ -run TestE2E_GitLabDrift
+go test -tags=integration -timeout 10m ./test/ -run TestE2E_GitLabRFCCheck
 go test -tags=integration -timeout 10m ./internal/gitlab/
+go test -tags=integration -timeout 10m ./internal/rfc/
 ```
 
 ## License
