@@ -106,7 +106,15 @@ func cleanOutput(output string) string {
 		lines = lines[:len(lines)-1]
 	}
 
-	return strings.Join(lines, "\n")
+	result := strings.Join(lines, "\n")
+
+	// If filtering removed everything, fall back to the ANSI-stripped
+	// output so error messages are still visible.
+	if result == "" && strings.TrimSpace(cleaned) != "" {
+		return strings.TrimSpace(cleaned)
+	}
+
+	return result
 }
 
 // FormatComment formats a single unit's plan/apply output as a markdown MR comment.
@@ -130,7 +138,7 @@ func FormatComment(unitPath, action, output string) string {
 
 	// Collapsible plan output
 	truncated := truncateOutput(cleaned, maxCommentSize-sb.Len()-200)
-	sb.WriteString("<details>\n")
+	sb.WriteString("<details open>\n")
 	sb.WriteString(fmt.Sprintf("<summary>Show full %s output</summary>\n\n", action))
 	sb.WriteString("```hcl\n")
 	sb.WriteString(truncated)
@@ -178,7 +186,7 @@ func FormatMultiUnitComment(results []UnitResult) string {
 	for _, r := range results {
 		cleaned := cleanOutput(r.Output)
 		truncated := truncateOutput(cleaned, (maxCommentSize-sb.Len())/len(results))
-		sb.WriteString(fmt.Sprintf("<details>\n<summary>%s <code>%s</code> &mdash; %s</summary>\n\n",
+		sb.WriteString(fmt.Sprintf("<details open>\n<summary>%s <code>%s</code> &mdash; %s</summary>\n\n",
 			statusIcon(r.Status), r.Path, formatCompactChanges(r.Summary)))
 		sb.WriteString("```hcl\n")
 		sb.WriteString(truncated)
@@ -216,7 +224,7 @@ func FormatDriftReport(results []UnitResult) string {
 		}
 		cleaned := cleanOutput(r.Output)
 		truncated := truncateOutput(cleaned, 50000)
-		sb.WriteString(fmt.Sprintf("<details>\n<summary><code>%s</code> &mdash; %s</summary>\n\n",
+		sb.WriteString(fmt.Sprintf("<details open>\n<summary><code>%s</code> &mdash; %s</summary>\n\n",
 			r.Path, formatCompactChanges(r.Summary)))
 		sb.WriteString("```hcl\n")
 		sb.WriteString(truncated)

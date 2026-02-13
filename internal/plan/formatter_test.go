@@ -21,7 +21,7 @@ func TestFormatComment_PlanWithChanges(t *testing.T) {
 	if !strings.Contains(comment, "2 to add") {
 		t.Error("expected comment to contain summary")
 	}
-	if !strings.Contains(comment, "<details>") {
+	if !strings.Contains(comment, "<details open>") {
 		t.Error("expected comment to contain collapsible section")
 	}
 }

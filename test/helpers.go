@@ -15,10 +15,11 @@ func RequireBinary(t *testing.T, name string) {
 	}
 }
 
-// RequirePodman skips the test if podman is not available.
-func RequirePodman(t *testing.T) string {
+// RequireContainerRuntime skips the test if neither podman nor docker is available.
+// Returns the path to whichever runtime was found (prefers podman).
+func RequireContainerRuntime(t *testing.T) string {
 	t.Helper()
-	// Try the wrapper script first, then podman.exe directly
+	// Try podman first: wrapper script, then .exe, then PATH
 	for _, candidate := range []string{
 		filepath.Join(os.Getenv("HOME"), ".local", "bin", "podman-host"),
 		"/mnt/c/Program Files/RedHat/Podman/podman.exe",
@@ -27,12 +28,20 @@ func RequirePodman(t *testing.T) string {
 			return candidate
 		}
 	}
-	// Try PATH
 	if path, err := exec.LookPath("podman"); err == nil {
 		return path
 	}
-	t.Skip("skipping: podman not available")
+	// Fall back to docker
+	if path, err := exec.LookPath("docker"); err == nil {
+		return path
+	}
+	t.Skip("skipping: neither podman nor docker available")
 	return ""
+}
+
+// RequirePodman is an alias for RequireContainerRuntime for backward compatibility.
+func RequirePodman(t *testing.T) string {
+	return RequireContainerRuntime(t)
 }
 
 // CreateTerragruntUnit creates a directory with a terragrunt.hcl and optional

@@ -1,6 +1,6 @@
 module github.com/justinholmes/grunter
 
-go 1.25.0
+go 1.20
 
 require (
 	github.com/agext/levenshtein v1.2.1 // indirect

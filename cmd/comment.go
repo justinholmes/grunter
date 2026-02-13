@@ -24,6 +24,7 @@ func init() {
 	commentCmd.Flags().String("project-id", "", "GitLab project ID (default: CI_PROJECT_ID)")
 	commentCmd.Flags().String("mr-iid", "", "MR IID (default: CI_MERGE_REQUEST_IID)")
 	commentCmd.Flags().String("gitlab-url", "", "GitLab URL (default: CI_SERVER_URL or https://gitlab.com)")
+	commentCmd.Flags().String("env", "", "include environment name in comment header and marker")
 	rootCmd.AddCommand(commentCmd)
 }
 
@@ -65,8 +66,10 @@ func runComment(cmd *cobra.Command, args []string) error {
 	}
 
 	token := os.Getenv("GITLAB_TOKEN")
+	tokenType := gitlab.PrivateToken
 	if token == "" {
 		token = os.Getenv("CI_JOB_TOKEN")
+		tokenType = gitlab.JobToken
 	}
 	if token == "" {
 		return fmt.Errorf("GITLAB_TOKEN or CI_JOB_TOKEN must be set")
@@ -76,8 +79,15 @@ func runComment(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("project-id and mr-iid are required (set flags or CI_PROJECT_ID/CI_MERGE_REQUEST_IID)")
 	}
 
-	client := gitlab.NewClient(gitlabURL, token)
-	if err := client.PostOrUpdateComment(projectID, mrIID, unitPath, formatted); err != nil {
+	// When --env is set, scope the comment marker to include the environment
+	envName, _ := cmd.Flags().GetString("env")
+	marker := unitPath
+	if envName != "" {
+		marker = "env:" + envName + ":" + unitPath
+	}
+
+	client := gitlab.NewClientWithTokenType(gitlabURL, token, tokenType)
+	if err := client.PostOrUpdateComment(projectID, mrIID, marker, formatted); err != nil {
 		return fmt.Errorf("posting comment: %w", err)
 	}
 

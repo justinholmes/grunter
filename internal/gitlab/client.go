@@ -13,18 +13,40 @@ import (
 const markerPrefix = "<!-- grunter:"
 const markerSuffix = " -->"
 
+// TokenType identifies how to authenticate with the GitLab API.
+type TokenType int
+
+const (
+	// PrivateToken authenticates via PRIVATE-TOKEN header (PAT or project access token).
+	PrivateToken TokenType = iota
+	// JobToken authenticates via JOB-TOKEN header (CI_JOB_TOKEN).
+	JobToken
+)
+
 // Client interacts with the GitLab REST API v4.
 type Client struct {
 	baseURL    string
 	token      string
+	tokenType  TokenType
 	httpClient *http.Client
 }
 
-// NewClient creates a GitLab API client.
+// NewClient creates a GitLab API client using a private access token.
 func NewClient(baseURL, token string) *Client {
 	return &Client{
 		baseURL:    strings.TrimRight(baseURL, "/"),
 		token:      token,
+		tokenType:  PrivateToken,
+		httpClient: &http.Client{},
+	}
+}
+
+// NewClientWithTokenType creates a GitLab API client with the specified token type.
+func NewClientWithTokenType(baseURL, token string, tokenType TokenType) *Client {
+	return &Client{
+		baseURL:    strings.TrimRight(baseURL, "/"),
+		token:      token,
+		tokenType:  tokenType,
 		httpClient: &http.Client{},
 	}
 }
@@ -32,6 +54,20 @@ func NewClient(baseURL, token string) *Client {
 type note struct {
 	ID   int    `json:"id"`
 	Body string `json:"body"`
+}
+
+// MergeRequest represents a GitLab merge request.
+type MergeRequest struct {
+	IID    int      `json:"iid"`
+	Title  string   `json:"title"`
+	Labels []string `json:"labels"`
+}
+
+// Issue represents a GitLab issue.
+type Issue struct {
+	IID    int      `json:"iid"`
+	Title  string   `json:"title"`
+	Labels []string `json:"labels"`
 }
 
 // PostOrUpdateComment posts a comment on a MR, or updates an existing one
@@ -101,6 +137,54 @@ func (c *Client) updateNote(projectID, mrIID string, noteID int, body string) er
 	return c.doJSON(http.MethodPut, endpoint, payload, nil)
 }
 
+// GetMRLabels returns the labels on a merge request.
+func (c *Client) GetMRLabels(projectID, mrIID string) ([]string, error) {
+	endpoint := fmt.Sprintf("%s/api/v4/projects/%s/merge_requests/%s",
+		c.baseURL, url.PathEscape(projectID), url.PathEscape(mrIID))
+
+	var mr MergeRequest
+	if err := c.doJSON(http.MethodGet, endpoint, nil, &mr); err != nil {
+		return nil, err
+	}
+	return mr.Labels, nil
+}
+
+// GetMRLinkedIssues returns issues that will be closed by a merge request.
+func (c *Client) GetMRLinkedIssues(projectID, mrIID string) ([]Issue, error) {
+	endpoint := fmt.Sprintf("%s/api/v4/projects/%s/merge_requests/%s/closes_issues?per_page=100",
+		c.baseURL, url.PathEscape(projectID), url.PathEscape(mrIID))
+
+	var issues []Issue
+	if err := c.doJSON(http.MethodGet, endpoint, nil, &issues); err != nil {
+		return nil, err
+	}
+	return issues, nil
+}
+
+// GetIssueLabels returns the labels on an issue.
+func (c *Client) GetIssueLabels(projectID string, issueIID int) ([]string, error) {
+	endpoint := fmt.Sprintf("%s/api/v4/projects/%s/issues/%d",
+		c.baseURL, url.PathEscape(projectID), issueIID)
+
+	var issue Issue
+	if err := c.doJSON(http.MethodGet, endpoint, nil, &issue); err != nil {
+		return nil, err
+	}
+	return issue.Labels, nil
+}
+
+// GetMRsForCommit returns merge requests associated with a commit SHA.
+func (c *Client) GetMRsForCommit(projectID, sha string) ([]MergeRequest, error) {
+	endpoint := fmt.Sprintf("%s/api/v4/projects/%s/repository/commits/%s/merge_requests?per_page=100",
+		c.baseURL, url.PathEscape(projectID), url.PathEscape(sha))
+
+	var mrs []MergeRequest
+	if err := c.doJSON(http.MethodGet, endpoint, nil, &mrs); err != nil {
+		return nil, err
+	}
+	return mrs, nil
+}
+
 func (c *Client) doJSON(method, endpoint string, payload interface{}, result interface{}) error {
 	var bodyReader io.Reader
 	if payload != nil {
@@ -116,7 +200,12 @@ func (c *Client) doJSON(method, endpoint string, payload interface{}, result int
 		return err
 	}
 
-	req.Header.Set("PRIVATE-TOKEN", c.token)
+	switch c.tokenType {
+	case JobToken:
+		req.Header.Set("JOB-TOKEN", c.token)
+	default:
+		req.Header.Set("PRIVATE-TOKEN", c.token)
+	}
 	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

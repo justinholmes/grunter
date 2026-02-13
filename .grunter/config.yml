@@ -4,3 +4,45 @@ tg_binary: terragrunt
 ignore:
   - "**/.terraform.lock.hcl"
   - "**/README.md"
+
+# Optional: define environments for env-aware commands (envdiff, promote, --env flag).
+# Order defines the promotion sequence for progressive deployments.
+# environments:
+#   - name: dev
+#     path: envs/dev
+#     regions:
+#       - us-east-1
+#       - eu-west-1
+#   - name: staging
+#     path: envs/staging
+#     regions:
+#       - us-east-1
+#     # RFC verification (GitLab-based)
+#     rfc:
+#       source: gitlab
+#       approved_label: rfc-approved
+#       issue_approved_label: "status::approved"
+#       emergency_label: emergency
+#     # Restrict deployments to business hours
+#     deployment_window:
+#       days: [monday, tuesday, wednesday, thursday, friday]
+#       start: "09:00"
+#       end: "17:00"
+#       timezone: UTC
+#   - name: prod
+#     path: envs/prod
+#     regions:
+#       - us-east-1
+#       - eu-west-1
+#     approval_group: platform-approvers
+#     # RFC verification (ServiceNow-based)
+#     rfc:
+#       source: servicenow
+#       instance_url: https://myco.service-now.com
+#       change_number_var: SNOW_CHG_NUMBER
+#       emergency_label: emergency
+#     deployment_window:
+#       days: [monday, tuesday, wednesday, thursday, friday]
+#       start: "06:00"
+#       end: "18:00"
+#       timezone: America/New_York

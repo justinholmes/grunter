@@ -22,6 +22,7 @@ var driftCmd = &cobra.Command{
 func init() {
 	driftCmd.Flags().String("root", ".", "root directory to scan for terragrunt units")
 	driftCmd.Flags().StringP("output", "o", "", "write drift report to file")
+	driftCmd.Flags().String("env", "", "scope drift detection to a specific environment")
 	rootCmd.AddCommand(driftCmd)
 }
 
@@ -33,6 +34,17 @@ func runDrift(cmd *cobra.Command, args []string) error {
 	}
 
 	root, _ := cmd.Flags().GetString("root")
+
+	// If --env is set, override root with the environment's path
+	envName, _ := cmd.Flags().GetString("env")
+	if envName != "" {
+		env := cfg.GetEnvironment(envName)
+		if env == nil {
+			return fmt.Errorf("unknown environment %q", envName)
+		}
+		root = env.Path
+	}
+
 	units, err := discoverUnits(root)
 	if err != nil {
 		return fmt.Errorf("discovering units: %w", err)

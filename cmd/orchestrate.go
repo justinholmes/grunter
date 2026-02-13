@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 
+	"strings"
+
 	"github.com/justinholmes/grunter/internal/changes"
 	"github.com/justinholmes/grunter/internal/config"
 	"github.com/justinholmes/grunter/internal/deps"
@@ -13,7 +15,8 @@ import (
 
 // ExecutionPlan is the JSON output of the orchestrate command.
 type ExecutionPlan struct {
-	Layers []ExecutionLayer `json:"layers"`
+	Environment string           `json:"environment,omitempty"`
+	Layers      []ExecutionLayer `json:"layers"`
 }
 
 // ExecutionLayer is a group of units that can run in parallel.
@@ -38,6 +41,7 @@ func init() {
 	orchestrateCmd.Flags().String("base", "", "base commit SHA (default: CI_MERGE_REQUEST_DIFF_BASE_SHA)")
 	orchestrateCmd.Flags().String("head", "", "head commit SHA (default: CI_COMMIT_SHA)")
 	orchestrateCmd.Flags().StringP("output", "o", "", "write execution plan to file instead of stdout")
+	orchestrateCmd.Flags().String("env", "", "filter changes to a specific environment")
 	rootCmd.AddCommand(orchestrateCmd)
 }
 
@@ -66,6 +70,25 @@ func runOrchestrate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("detecting changes: %w", err)
 	}
 
+	// Filter by environment if --env is set
+	envName, _ := cmd.Flags().GetString("env")
+	var envLabel string
+	if envName != "" {
+		env := cfg.GetEnvironment(envName)
+		if env == nil {
+			return fmt.Errorf("unknown environment %q", envName)
+		}
+		envLabel = envName
+		prefix := env.Path + "/"
+		var filtered []changes.Change
+		for _, c := range changed {
+			if strings.HasPrefix(c.UnitPath, prefix) {
+				filtered = append(filtered, c)
+			}
+		}
+		changed = filtered
+	}
+
 	if len(changed) == 0 {
 		fmt.Fprintln(os.Stderr, "No infrastructure changes detected.")
 		plan := ExecutionPlan{Layers: []ExecutionLayer{}}
@@ -89,7 +112,7 @@ func runOrchestrate(cmd *cobra.Command, args []string) error {
 		changeLookup[c.UnitPath] = c.Type
 	}
 
-	plan := ExecutionPlan{Layers: make([]ExecutionLayer, 0, len(layers))}
+	plan := ExecutionPlan{Environment: envLabel, Layers: make([]ExecutionLayer, 0, len(layers))}
 	for _, layer := range layers {
 		el := ExecutionLayer{Units: make([]PlannedUnit, 0, len(layer))}
 		for _, unitPath := range layer {
