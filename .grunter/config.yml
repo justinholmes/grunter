@@ -70,3 +70,16 @@ ignore:
 #       allowed_field: is_open
 #       message_field: reason
 #       next_window_field: next_open_at
+#
+#   # Example: custom RFC with OIDC ID token auth
+#   - name: oidc-env
+#     path: envs/oidc
+#     rfc:
+#       source: custom
+#       url: "https://change-mgmt.example.com/api/v1/changes/{{change_id}}"
+#       change_number_var: RFC_CHANGE_ID
+#       auth_type: id_token
+#       auth_token_var: VAULT_ID_TOKEN
+#       auth_token_aud: https://vault.example.com
+#       approved_field: status
+#       approved_value: approved

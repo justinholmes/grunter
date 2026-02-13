@@ -157,7 +157,7 @@ func (c *CustomChecker) CheckRFC() (*CheckResult, error) {
 // applyAuth sets authentication headers on the request based on the auth type.
 func applyAuth(req *http.Request, authType, token, username, headerName string) {
 	switch authType {
-	case "bearer":
+	case "bearer", "id_token":
 		req.Header.Set("Authorization", "Bearer "+token)
 	case "basic":
 		req.SetBasicAuth(username, token)

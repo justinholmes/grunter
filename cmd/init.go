@@ -388,6 +388,7 @@ func writeApproveDeployGate(b *strings.Builder, target config.Environment, gener
 	b.WriteString("      allow_failure: false\n")
 	b.WriteString("  needs:\n")
 	fmt.Fprintf(b, "    - %s\n", generateJobName)
+	writeIDTokens(b, target)
 	b.WriteString("  script:\n")
 
 	// RFC check step (before group membership check)
@@ -474,5 +475,57 @@ func writeParentCanaryGate(b *strings.Builder, target config.Environment, canary
 	} else {
 		b.WriteString("  script:\n")
 		fmt.Fprintf(b, "    - echo \"Canary approved. Deploying remaining %s regions.\"\n\n", target.Name)
+	}
+}
+
+// idToken pairs an env var name with an OIDC audience for GitLab CI id_tokens.
+type idToken struct {
+	VarName  string
+	Audience string
+}
+
+// collectIDTokens returns ID token declarations needed by the environment's
+// custom RFC and/or deployment window configs.
+func collectIDTokens(env config.Environment) []idToken {
+	var tokens []idToken
+	seen := make(map[string]bool)
+
+	if env.RFC != nil && env.RFC.AuthType == "id_token" && env.RFC.AuthTokenVar != "" {
+		if !seen[env.RFC.AuthTokenVar] {
+			aud := env.RFC.AuthTokenAud
+			if aud == "" {
+				aud = "${CI_SERVER_URL}"
+			}
+			tokens = append(tokens, idToken{VarName: env.RFC.AuthTokenVar, Audience: aud})
+			seen[env.RFC.AuthTokenVar] = true
+		}
+	}
+
+	if env.DeploymentWindow != nil && env.DeploymentWindow.AuthType == "id_token" && env.DeploymentWindow.AuthTokenVar != "" {
+		if !seen[env.DeploymentWindow.AuthTokenVar] {
+			aud := env.DeploymentWindow.AuthTokenAud
+			if aud == "" {
+				aud = "${CI_SERVER_URL}"
+			}
+			tokens = append(tokens, idToken{VarName: env.DeploymentWindow.AuthTokenVar, Audience: aud})
+			seen[env.DeploymentWindow.AuthTokenVar] = true
+		}
+	}
+
+	return tokens
+}
+
+// writeIDTokens emits the id_tokens block for a job if the environment uses
+// id_token auth for its custom RFC or deployment window config.
+func writeIDTokens(b *strings.Builder, env config.Environment) {
+	tokens := collectIDTokens(env)
+	if len(tokens) == 0 {
+		return
+	}
+
+	b.WriteString("  id_tokens:\n")
+	for _, t := range tokens {
+		fmt.Fprintf(b, "    %s:\n", t.VarName)
+		fmt.Fprintf(b, "      aud: %s\n", t.Audience)
 	}
 }

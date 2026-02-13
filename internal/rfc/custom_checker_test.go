@@ -334,6 +334,37 @@ func TestCustomChecker_HeaderAuth(t *testing.T) {
 	}
 }
 
+func TestCustomChecker_IDTokenAuth(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		if auth != "Bearer oidc-jwt-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status": "approved",
+		})
+	}))
+	defer srv.Close()
+
+	checker := &CustomChecker{
+		URL:           srv.URL,
+		AuthType:      "id_token",
+		AuthToken:     "oidc-jwt-token",
+		ApprovedField: "status",
+		ApprovedValue: "approved",
+		ChangeID:      "CHG-1",
+	}
+
+	result, err := checker.CheckRFC()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.Approved {
+		t.Errorf("expected approved with id_token auth, got: %s", result.Message)
+	}
+}
+
 func TestCustomChecker_CaseInsensitiveMatch(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]interface{}{

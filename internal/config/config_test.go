@@ -768,6 +768,72 @@ environments:
 	}
 }
 
+func TestLoad_ParsesRFCConfig_CustomIDToken(t *testing.T) {
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "config.yml")
+
+	content := `
+environments:
+  - name: prod
+    path: envs/prod
+    rfc:
+      source: custom
+      url: "https://change-mgmt.example.com/api/v1/changes/{{change_id}}"
+      auth_type: id_token
+      auth_token_var: VAULT_ID_TOKEN
+      auth_token_aud: https://vault.example.com
+      approved_field: status
+      approved_value: approved
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	env := cfg.GetEnvironment("prod")
+	if env == nil {
+		t.Fatal("expected prod environment")
+	}
+	if env.RFC.AuthType != "id_token" {
+		t.Errorf("expected auth_type=id_token, got %s", env.RFC.AuthType)
+	}
+	if env.RFC.AuthTokenVar != "VAULT_ID_TOKEN" {
+		t.Errorf("expected auth_token_var=VAULT_ID_TOKEN, got %s", env.RFC.AuthTokenVar)
+	}
+	if env.RFC.AuthTokenAud != "https://vault.example.com" {
+		t.Errorf("expected auth_token_aud=https://vault.example.com, got %s", env.RFC.AuthTokenAud)
+	}
+}
+
+func TestValidate_RFCCustom_IDTokenMissingTokenVar(t *testing.T) {
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "config.yml")
+
+	content := `
+environments:
+  - name: prod
+    path: envs/prod
+    rfc:
+      source: custom
+      url: "https://example.com/api"
+      approved_field: status
+      approved_value: approved
+      auth_type: id_token
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Load(cfgPath)
+	if err == nil {
+		t.Fatal("expected error for missing auth_token_var with id_token auth")
+	}
+}
+
 func TestValidate_DeploymentWindow_InvalidDay(t *testing.T) {
 	tmp := t.TempDir()
 	cfgPath := filepath.Join(tmp, "config.yml")

@@ -327,7 +327,7 @@ environments:
       url: "https://change-mgmt.example.com/api/v1/changes/{{change_id}}"
       method: GET                        # optional, default GET
       change_number_var: RFC_CHANGE_ID   # env var holding the change identifier
-      auth_type: bearer                  # "basic", "bearer", or "header"
+      auth_type: bearer                  # "basic", "bearer", "header", or "id_token"
       auth_token_var: CHANGE_API_TOKEN   # env var holding the credential
       response_path: data               # optional — dot-path to drill into response
       approved_field: status             # JSON field to check for approval
@@ -337,7 +337,7 @@ environments:
       identifier_field: ticket_number   # optional — field for display identifier
 ```
 
-`{{change_id}}` in the URL is replaced with the value from `change_number_var` (or `--change-number`). Auth types: `bearer` (Authorization: Bearer), `basic` (HTTP Basic with `auth_username_var`/`auth_token_var`), or `header` (custom header via `auth_header_name`).
+`{{change_id}}` in the URL is replaced with the value from `change_number_var` (or `--change-number`). Auth types: `bearer` (Authorization: Bearer), `basic` (HTTP Basic with `auth_username_var`/`auth_token_var`), `header` (custom header via `auth_header_name`), or `id_token` (GitLab CI OIDC — see below).
 
 ### Deployment windows (optional)
 
@@ -371,6 +371,32 @@ environments:
       allowed_field: is_open             # JSON field — boolean or "true"/"false" string
       message_field: reason              # optional — extracted when not allowed
       next_window_field: next_open_at    # optional — ISO 8601 timestamp
+```
+
+### OIDC ID tokens (optional)
+
+Custom RFC and deployment window APIs can authenticate using GitLab CI [ID tokens](https://docs.gitlab.com/ci/secrets/id_token_authentication/) (OIDC JWTs) instead of stored secrets. Set `auth_type: id_token` and `grunter init` will generate the `id_tokens` stanza on the approval job automatically:
+
+```yaml
+environments:
+  - name: prod
+    path: envs/prod
+    rfc:
+      source: custom
+      url: "https://change-mgmt.example.com/api/v1/changes/{{change_id}}"
+      auth_type: id_token
+      auth_token_var: VAULT_ID_TOKEN        # env var GitLab injects the JWT into
+      auth_token_aud: https://vault.example.com  # optional — OIDC audience claim
+      approved_field: status
+      approved_value: approved
+```
+
+When `auth_token_aud` is omitted, it defaults to `${CI_SERVER_URL}`. The generated CI job will include:
+
+```yaml
+id_tokens:
+  VAULT_ID_TOKEN:
+    aud: https://vault.example.com
 ```
 
 ### Approval group (optional)

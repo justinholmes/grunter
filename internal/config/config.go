@@ -43,6 +43,7 @@ type RFCConfig struct {
 	Method          string `yaml:"method,omitempty"`
 	AuthType        string `yaml:"auth_type,omitempty"`
 	AuthTokenVar    string `yaml:"auth_token_var,omitempty"`
+	AuthTokenAud    string `yaml:"auth_token_aud,omitempty"`
 	AuthUsernameVar string `yaml:"auth_username_var,omitempty"`
 	AuthHeaderName  string `yaml:"auth_header_name,omitempty"`
 	ResponseType    string `yaml:"response_type,omitempty"`
@@ -67,6 +68,7 @@ type DeploymentWindow struct {
 	Method          string `yaml:"method,omitempty"`
 	AuthType        string `yaml:"auth_type,omitempty"`
 	AuthTokenVar    string `yaml:"auth_token_var,omitempty"`
+	AuthTokenAud    string `yaml:"auth_token_aud,omitempty"`
 	AuthUsernameVar string `yaml:"auth_username_var,omitempty"`
 	AuthHeaderName  string `yaml:"auth_header_name,omitempty"`
 	ResponsePath    string `yaml:"response_path,omitempty"`
@@ -242,9 +244,9 @@ func validateAuthFields(envName, section, authType, tokenVar, usernameVar, heade
 		return nil
 	}
 	switch authType {
-	case "bearer":
+	case "bearer", "id_token":
 		if tokenVar == "" {
-			return fmt.Errorf("environment %q: %s.auth_token_var is required for bearer auth", envName, section)
+			return fmt.Errorf("environment %q: %s.auth_token_var is required for %s auth", envName, section, authType)
 		}
 	case "basic":
 		if tokenVar == "" {
@@ -261,7 +263,7 @@ func validateAuthFields(envName, section, authType, tokenVar, usernameVar, heade
 			return fmt.Errorf("environment %q: %s.auth_header_name is required for header auth", envName, section)
 		}
 	default:
-		return fmt.Errorf("environment %q: %s.auth_type must be \"bearer\", \"basic\", or \"header\"", envName, section)
+		return fmt.Errorf("environment %q: %s.auth_type must be \"bearer\", \"basic\", \"header\", or \"id_token\"", envName, section)
 	}
 	return nil
 }
