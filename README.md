@@ -52,7 +52,11 @@ ignore:
   - "**/README.md"
 ```
 
-2. Copy `templates/gitlab-ci.yml` into your repo as `.gitlab-ci.yml` (or include it).
+2. Generate your `.gitlab-ci.yml`:
+
+```bash
+grunter init
+```
 
 3. Open a Merge Request that modifies a Terragrunt unit. Grunter will detect the changes, run plans, and post the results as MR comments.
 
