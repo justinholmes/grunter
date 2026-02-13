@@ -441,6 +441,333 @@ environments:
 	}
 }
 
+func TestLoad_ParsesRFCConfig_Custom(t *testing.T) {
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "config.yml")
+
+	content := `
+environments:
+  - name: prod
+    path: envs/prod
+    rfc:
+      source: custom
+      url: "https://change-mgmt.example.com/api/v1/changes/{{change_id}}"
+      method: GET
+      change_number_var: RFC_CHANGE_ID
+      auth_type: bearer
+      auth_token_var: CHANGE_API_TOKEN
+      response_type: object
+      response_path: data
+      approved_field: status
+      approved_value: approved
+      emergency_field: priority
+      emergency_value: P1
+      identifier_field: ticket_number
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	env := cfg.GetEnvironment("prod")
+	if env == nil {
+		t.Fatal("expected prod environment")
+	}
+	if env.RFC.Source != RFCSourceCustom {
+		t.Errorf("expected source=custom, got %s", env.RFC.Source)
+	}
+	if env.RFC.URL != "https://change-mgmt.example.com/api/v1/changes/{{change_id}}" {
+		t.Errorf("unexpected url: %s", env.RFC.URL)
+	}
+	if env.RFC.AuthType != "bearer" {
+		t.Errorf("expected auth_type=bearer, got %s", env.RFC.AuthType)
+	}
+	if env.RFC.ApprovedField != "status" {
+		t.Errorf("expected approved_field=status, got %s", env.RFC.ApprovedField)
+	}
+	if env.RFC.ApprovedValue != "approved" {
+		t.Errorf("expected approved_value=approved, got %s", env.RFC.ApprovedValue)
+	}
+	if env.RFC.EmergencyField != "priority" {
+		t.Errorf("expected emergency_field=priority, got %s", env.RFC.EmergencyField)
+	}
+	if env.RFC.IdentifierField != "ticket_number" {
+		t.Errorf("expected identifier_field=ticket_number, got %s", env.RFC.IdentifierField)
+	}
+}
+
+func TestLoad_ParsesDeploymentWindow_Custom(t *testing.T) {
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "config.yml")
+
+	content := `
+environments:
+  - name: prod
+    path: envs/prod
+    deployment_window:
+      source: custom
+      url: "https://deploy-gate.example.com/api/v1/windows/current"
+      auth_type: bearer
+      auth_token_var: DEPLOY_GATE_TOKEN
+      response_path: data
+      allowed_field: is_open
+      message_field: reason
+      next_window_field: next_open_at
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	env := cfg.GetEnvironment("prod")
+	if env == nil {
+		t.Fatal("expected prod environment")
+	}
+	if env.DeploymentWindow.Source != DeploymentWindowCustom {
+		t.Errorf("expected source=custom, got %s", env.DeploymentWindow.Source)
+	}
+	if env.DeploymentWindow.URL != "https://deploy-gate.example.com/api/v1/windows/current" {
+		t.Errorf("unexpected url: %s", env.DeploymentWindow.URL)
+	}
+	if env.DeploymentWindow.AllowedField != "is_open" {
+		t.Errorf("expected allowed_field=is_open, got %s", env.DeploymentWindow.AllowedField)
+	}
+	if env.DeploymentWindow.MessageField != "reason" {
+		t.Errorf("expected message_field=reason, got %s", env.DeploymentWindow.MessageField)
+	}
+	if env.DeploymentWindow.NextWindowField != "next_open_at" {
+		t.Errorf("expected next_window_field=next_open_at, got %s", env.DeploymentWindow.NextWindowField)
+	}
+}
+
+func TestValidate_RFCCustom_MissingURL(t *testing.T) {
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "config.yml")
+
+	content := `
+environments:
+  - name: prod
+    path: envs/prod
+    rfc:
+      source: custom
+      approved_field: status
+      approved_value: approved
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Load(cfgPath)
+	if err == nil {
+		t.Fatal("expected error for missing url")
+	}
+}
+
+func TestValidate_RFCCustom_MissingApprovedField(t *testing.T) {
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "config.yml")
+
+	content := `
+environments:
+  - name: prod
+    path: envs/prod
+    rfc:
+      source: custom
+      url: "https://example.com/api"
+      approved_value: approved
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Load(cfgPath)
+	if err == nil {
+		t.Fatal("expected error for missing approved_field")
+	}
+}
+
+func TestValidate_RFCCustom_InvalidAuthType(t *testing.T) {
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "config.yml")
+
+	content := `
+environments:
+  - name: prod
+    path: envs/prod
+    rfc:
+      source: custom
+      url: "https://example.com/api"
+      approved_field: status
+      approved_value: approved
+      auth_type: oauth2
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Load(cfgPath)
+	if err == nil {
+		t.Fatal("expected error for invalid auth_type")
+	}
+}
+
+func TestValidate_RFCCustom_BasicAuthMissingUsername(t *testing.T) {
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "config.yml")
+
+	content := `
+environments:
+  - name: prod
+    path: envs/prod
+    rfc:
+      source: custom
+      url: "https://example.com/api"
+      approved_field: status
+      approved_value: approved
+      auth_type: basic
+      auth_token_var: API_PASS
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Load(cfgPath)
+	if err == nil {
+		t.Fatal("expected error for missing auth_username_var with basic auth")
+	}
+}
+
+func TestValidate_RFCCustom_HeaderAuthMissingHeaderName(t *testing.T) {
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "config.yml")
+
+	content := `
+environments:
+  - name: prod
+    path: envs/prod
+    rfc:
+      source: custom
+      url: "https://example.com/api"
+      approved_field: status
+      approved_value: approved
+      auth_type: header
+      auth_token_var: API_KEY
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Load(cfgPath)
+	if err == nil {
+		t.Fatal("expected error for missing auth_header_name with header auth")
+	}
+}
+
+func TestValidate_DeploymentWindowCustom_MissingURL(t *testing.T) {
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "config.yml")
+
+	content := `
+environments:
+  - name: prod
+    path: envs/prod
+    deployment_window:
+      source: custom
+      allowed_field: is_open
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Load(cfgPath)
+	if err == nil {
+		t.Fatal("expected error for missing url in custom deployment window")
+	}
+}
+
+func TestValidate_DeploymentWindowCustom_MissingAllowedField(t *testing.T) {
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "config.yml")
+
+	content := `
+environments:
+  - name: prod
+    path: envs/prod
+    deployment_window:
+      source: custom
+      url: "https://deploy-gate.example.com/api/v1/windows/current"
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Load(cfgPath)
+	if err == nil {
+		t.Fatal("expected error for missing allowed_field in custom deployment window")
+	}
+}
+
+func TestValidate_DeploymentWindow_ScheduleBackwardCompat(t *testing.T) {
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "config.yml")
+
+	// No source field — should default to schedule and still work
+	content := `
+environments:
+  - name: staging
+    path: envs/staging
+    deployment_window:
+      days: [monday, friday]
+      start: "08:00"
+      end: "16:00"
+      timezone: UTC
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("expected no error for schedule window without source, got: %v", err)
+	}
+
+	env := cfg.GetEnvironment("staging")
+	if !env.HasDeploymentWindow() {
+		t.Error("expected HasDeploymentWindow to be true")
+	}
+}
+
+func TestValidate_DeploymentWindow_InvalidSource(t *testing.T) {
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "config.yml")
+
+	content := `
+environments:
+  - name: prod
+    path: envs/prod
+    deployment_window:
+      source: magic
+      url: "https://example.com"
+      allowed_field: open
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Load(cfgPath)
+	if err == nil {
+		t.Fatal("expected error for invalid deployment_window source")
+	}
+}
+
 func TestValidate_DeploymentWindow_InvalidDay(t *testing.T) {
 	tmp := t.TempDir()
 	cfgPath := filepath.Join(tmp, "config.yml")

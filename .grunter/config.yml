@@ -46,3 +46,27 @@ ignore:
 #       start: "06:00"
 #       end: "18:00"
 #       timezone: America/New_York
+#
+#   # Example: custom RFC + custom deployment window
+#   - name: custom-env
+#     path: envs/custom
+#     rfc:
+#       source: custom
+#       url: "https://change-mgmt.example.com/api/v1/changes/{{change_id}}"
+#       change_number_var: RFC_CHANGE_ID
+#       auth_type: bearer
+#       auth_token_var: CHANGE_API_TOKEN
+#       response_path: data
+#       approved_field: status
+#       approved_value: approved
+#       emergency_field: priority
+#       emergency_value: P1
+#       identifier_field: ticket_number
+#     deployment_window:
+#       source: custom
+#       url: "https://deploy-gate.example.com/api/v1/windows/current"
+#       auth_type: bearer
+#       auth_token_var: DEPLOY_GATE_TOKEN
+#       allowed_field: is_open
+#       message_field: reason
+#       next_window_field: next_open_at

@@ -207,7 +207,7 @@ grunter rfc-check --env staging [--project-id 123] [--mr-iid 1] [--gitlab-url ht
 | `--change-number` | — | configured via `change_number_var` in config |
 | `--skip-window` | `false` | — |
 
-Requires `GITLAB_TOKEN` or `CI_JOB_TOKEN` for GitLab source, or `SERVICENOW_USERNAME` + `SERVICENOW_PASSWORD` for ServiceNow source.
+Requires `GITLAB_TOKEN` or `CI_JOB_TOKEN` for GitLab source, `SERVICENOW_USERNAME` + `SERVICENOW_PASSWORD` for ServiceNow source, or the configured `auth_token_var` for custom sources.
 
 **GitLab source** checks:
 - MR has the `approved_label` (e.g. `rfc-approved`)
@@ -312,9 +312,34 @@ environments:
       change_number_var: SNOW_CHG_NUMBER  # env var containing the change number
 ```
 
+**Custom API-based** (any HTTP endpoint):
+
+```yaml
+environments:
+  - name: prod
+    path: envs/prod
+    rfc:
+      source: custom
+      url: "https://change-mgmt.example.com/api/v1/changes/{{change_id}}"
+      method: GET                        # optional, default GET
+      change_number_var: RFC_CHANGE_ID   # env var holding the change identifier
+      auth_type: bearer                  # "basic", "bearer", or "header"
+      auth_token_var: CHANGE_API_TOKEN   # env var holding the credential
+      response_path: data               # optional — dot-path to drill into response
+      approved_field: status             # JSON field to check for approval
+      approved_value: approved           # value that means approved
+      emergency_field: priority          # optional — field for emergency detection
+      emergency_value: P1               # value that means emergency
+      identifier_field: ticket_number   # optional — field for display identifier
+```
+
+`{{change_id}}` in the URL is replaced with the value from `change_number_var` (or `--change-number`). Auth types: `bearer` (Authorization: Bearer), `basic` (HTTP Basic with `auth_username_var`/`auth_token_var`), or `header` (custom header via `auth_header_name`).
+
 ### Deployment windows (optional)
 
 Restrict deployments to specific days and times. Emergency RFCs bypass this check.
+
+**Schedule-based** (default):
 
 ```yaml
 environments:
@@ -325,6 +350,23 @@ environments:
       start: "09:00"
       end: "17:00"
       timezone: America/New_York
+```
+
+**Custom API-based**:
+
+```yaml
+environments:
+  - name: prod
+    path: envs/prod
+    deployment_window:
+      source: custom
+      url: "https://deploy-gate.example.com/api/v1/windows/current"
+      auth_type: bearer
+      auth_token_var: DEPLOY_GATE_TOKEN
+      response_path: data               # optional — dot-path into response
+      allowed_field: is_open             # JSON field — boolean or "true"/"false" string
+      message_field: reason              # optional — extracted when not allowed
+      next_window_field: next_open_at    # optional — ISO 8601 timestamp
 ```
 
 ### Approval group (optional)

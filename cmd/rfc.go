@@ -25,7 +25,7 @@ func init() {
 	rfcCheckCmd.Flags().String("project-id", "", "GitLab project ID (default: CI_PROJECT_ID)")
 	rfcCheckCmd.Flags().String("mr-iid", "", "MR IID (default: CI_MERGE_REQUEST_IID)")
 	rfcCheckCmd.Flags().String("gitlab-url", "", "GitLab URL (default: CI_SERVER_URL or https://gitlab.com)")
-	rfcCheckCmd.Flags().String("change-number", "", "ServiceNow change number (default: from env var configured in config)")
+	rfcCheckCmd.Flags().String("change-number", "", "change number / identifier (default: from env var configured in config)")
 	rfcCheckCmd.Flags().Bool("skip-window", false, "skip deployment window check")
 	rootCmd.AddCommand(rfcCheckCmd)
 }
@@ -67,6 +67,11 @@ func runRFCCheck(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return err
 		}
+	case config.RFCSourceCustom:
+		checker, err = buildCustomChecker(cmd, env)
+		if err != nil {
+			return err
+		}
 	default:
 		return fmt.Errorf("unsupported RFC source %q", env.RFC.Source)
 	}
@@ -92,9 +97,22 @@ func runRFCCheck(cmd *cobra.Command, args []string) error {
 	// Deployment window check
 	skipWindow, _ := cmd.Flags().GetBool("skip-window")
 	if !skipWindow && env.HasDeploymentWindow() {
-		windowResult, err := rfc.CheckDeploymentWindow(env.DeploymentWindow, time.Now())
-		if err != nil {
-			return fmt.Errorf("deployment window check failed: %w", err)
+		var windowResult *rfc.WindowResult
+
+		if env.DeploymentWindow.Source == config.DeploymentWindowCustom {
+			cwc, err := buildCustomWindowChecker(env)
+			if err != nil {
+				return fmt.Errorf("building custom window checker: %w", err)
+			}
+			windowResult, err = cwc.CheckWindow()
+			if err != nil {
+				return fmt.Errorf("deployment window check failed: %w", err)
+			}
+		} else {
+			windowResult, err = rfc.CheckDeploymentWindow(env.DeploymentWindow, time.Now())
+			if err != nil {
+				return fmt.Errorf("deployment window check failed: %w", err)
+			}
 		}
 
 		if !windowResult.Allowed {
@@ -177,4 +195,81 @@ func buildServiceNowChecker(cmd *cobra.Command, env *config.Environment) (*rfc.S
 		ChangeNumber: changeNumber,
 		Config:       env.RFC,
 	}, nil
+}
+
+func buildCustomChecker(cmd *cobra.Command, env *config.Environment) (*rfc.CustomChecker, error) {
+	changeID, _ := cmd.Flags().GetString("change-number")
+	if changeID == "" && env.RFC.ChangeNumberVar != "" {
+		changeID = os.Getenv(env.RFC.ChangeNumberVar)
+	}
+
+	token, username, headerName, err := resolveAuth(env.RFC.AuthType, env.RFC.AuthTokenVar, env.RFC.AuthUsernameVar, env.RFC.AuthHeaderName)
+	if err != nil {
+		return nil, err
+	}
+
+	return &rfc.CustomChecker{
+		HTTPClient:      &http.Client{Timeout: 30 * time.Second},
+		URL:             env.RFC.URL,
+		Method:          env.RFC.Method,
+		AuthType:        env.RFC.AuthType,
+		AuthToken:       token,
+		AuthUsername:     username,
+		AuthHeaderName:  headerName,
+		ResponseType:    env.RFC.ResponseType,
+		ResponsePath:    env.RFC.ResponsePath,
+		ApprovedField:   env.RFC.ApprovedField,
+		ApprovedValue:   env.RFC.ApprovedValue,
+		EmergencyField:  env.RFC.EmergencyField,
+		EmergencyValue:  env.RFC.EmergencyValue,
+		IdentifierField: env.RFC.IdentifierField,
+		ChangeID:        changeID,
+	}, nil
+}
+
+func buildCustomWindowChecker(env *config.Environment) (*rfc.CustomWindowChecker, error) {
+	w := env.DeploymentWindow
+	token, username, headerName, err := resolveAuth(w.AuthType, w.AuthTokenVar, w.AuthUsernameVar, w.AuthHeaderName)
+	if err != nil {
+		return nil, err
+	}
+
+	return &rfc.CustomWindowChecker{
+		HTTPClient:      &http.Client{Timeout: 30 * time.Second},
+		URL:             w.URL,
+		Method:          w.Method,
+		AuthType:        w.AuthType,
+		AuthToken:       token,
+		AuthUsername:     username,
+		AuthHeaderName:  headerName,
+		ResponsePath:    w.ResponsePath,
+		AllowedField:    w.AllowedField,
+		MessageField:    w.MessageField,
+		NextWindowField: w.NextWindowField,
+	}, nil
+}
+
+// resolveAuth reads auth credentials from environment variables based on auth type.
+func resolveAuth(authType, tokenVar, usernameVar, headerName string) (token, username, header string, err error) {
+	if authType == "" {
+		return "", "", "", nil
+	}
+
+	header = headerName
+
+	if tokenVar != "" {
+		token = os.Getenv(tokenVar)
+		if token == "" {
+			return "", "", "", fmt.Errorf("environment variable %s is not set (required for %s auth)", tokenVar, authType)
+		}
+	}
+
+	if authType == "basic" && usernameVar != "" {
+		username = os.Getenv(usernameVar)
+		if username == "" {
+			return "", "", "", fmt.Errorf("environment variable %s is not set (required for basic auth)", usernameVar)
+		}
+	}
+
+	return token, username, header, nil
 }
