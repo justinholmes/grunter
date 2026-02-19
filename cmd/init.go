@@ -131,7 +131,7 @@ func generateGitLabCI(cfg *config.Config, cfgPath string) string {
 	b.WriteString("          --input \"plan-${unit//\\//-}.txt\" \\\n")
 	b.WriteString("          --unit \"$unit\" \\\n")
 	b.WriteString("          --action plan \\\n")
-	b.WriteString("          --config \"$GRUNTER_CONFIG\"\n")
+	b.WriteString("          --config \"$GRUNTER_CONFIG\" || true\n")
 	b.WriteString("      done\n\n")
 
 	// Envdiff (MR only)
@@ -146,6 +146,7 @@ func generateGitLabCI(cfg *config.Config, cfgPath string) string {
 		first := cfg.Environments[0].Name
 		last := cfg.Environments[len(cfg.Environments)-1].Name
 		fmt.Fprintf(&b, "    - grunter envdiff %s %s --config \"$GRUNTER_CONFIG\" -o envdiff-report.md\n", first, last)
+		b.WriteString("    - grunter comment --raw --input envdiff-report.md --unit envdiff --config \"$GRUNTER_CONFIG\"\n")
 		b.WriteString("  artifacts:\n")
 		b.WriteString("    paths:\n")
 		b.WriteString("      - envdiff-report.md\n")

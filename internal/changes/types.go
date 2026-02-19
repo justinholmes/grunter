@@ -8,6 +8,7 @@ const (
 	ModuleAdded      ChangeType = "ModuleAdded"
 	ModuleDeleted    ChangeType = "ModuleDeleted"
 	EnvCommonChanged ChangeType = "EnvCommonChanged"
+	SourceChanged    ChangeType = "SourceChanged"
 )
 
 // Change represents a single detected infrastructure change.

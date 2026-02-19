@@ -89,7 +89,17 @@ func SetupGitLab(t *testing.T) *GitLabTestEnv {
 func startGitLabContainer(t *testing.T, podman string) {
 	t.Helper()
 
-	exec.Command(podman, "rm", "-f", containerName).Run()
+	rmCmd := exec.Command(podman, "rm", "-f", containerName)
+	rmCmd.Run()
+	// Wait for the container name to be released; Podman on Windows/WSL2
+	// sometimes returns before the name is actually free.
+	for i := 0; i < 10; i++ {
+		out, _ := exec.Command(podman, "ps", "-a", "--filter", "name="+containerName, "--format", "{{.ID}}").Output()
+		if strings.TrimSpace(string(out)) == "" {
+			break
+		}
+		time.Sleep(1 * time.Second)
+	}
 
 	cmd := exec.Command(podman, "run", "-d",
 		"--name", containerName,

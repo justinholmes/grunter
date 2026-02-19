@@ -1,6 +1,7 @@
 package changes
 
 import (
+	"bufio"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -32,6 +33,8 @@ func (d *Detector) Detect(base, head string) ([]Change, error) {
 
 	unitChanges := make(map[string]*Change)
 
+	var unresolvedFiles []string
+
 	for _, f := range files {
 		// Check if this is an _envcommon change
 		if isEnvCommon(f) {
@@ -52,6 +55,7 @@ func (d *Detector) Detect(base, head string) ([]Change, error) {
 
 		unitPath := d.resolveUnit(f)
 		if unitPath == "" {
+			unresolvedFiles = append(unresolvedFiles, f)
 			continue
 		}
 
@@ -65,6 +69,24 @@ func (d *Detector) Detect(base, head string) ([]Change, error) {
 			UnitPath: unitPath,
 			Type:     changeType,
 			Files:    []string{f},
+		}
+	}
+
+	// Check if unresolved files are in shared module directories.
+	// When a Terraform module changes, all units that source it are affected.
+	if len(unresolvedFiles) > 0 {
+		moduleDirs := d.findModuleDirs(unresolvedFiles)
+		for _, moduleDir := range moduleDirs {
+			dependents := d.findModuleDependents(moduleDir)
+			for _, dep := range dependents {
+				if _, ok := unitChanges[dep]; !ok {
+					unitChanges[dep] = &Change{
+						UnitPath: dep,
+						Type:     SourceChanged,
+						Files:    []string{moduleDir},
+					}
+				}
+			}
 		}
 	}
 
@@ -218,4 +240,119 @@ func (d *Detector) findEnvCommonDependents(envCommonFile string) []string {
 	})
 
 	return dependents
+}
+
+// findModuleDirs identifies unique Terraform module directories from a list of
+// unresolved file paths. A module directory contains at least one .tf file but
+// no terragrunt.hcl.
+func (d *Detector) findModuleDirs(files []string) []string {
+	seen := make(map[string]bool)
+	var dirs []string
+	for _, f := range files {
+		dir := filepath.Dir(f)
+		for dir != "." && dir != "/" {
+			if seen[dir] {
+				break
+			}
+			// A module directory has .tf files but no terragrunt.hcl
+			if hasTFFiles(dir) {
+				seen[dir] = true
+				dirs = append(dirs, dir)
+				break
+			}
+			dir = filepath.Dir(dir)
+		}
+	}
+	return dirs
+}
+
+// hasTFFiles returns true if the directory contains at least one .tf file.
+func hasTFFiles(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".tf") {
+			return true
+		}
+	}
+	return false
+}
+
+// findModuleDependents walks the repo looking for terragrunt.hcl files whose
+// terraform source resolves to the given module directory.
+func (d *Detector) findModuleDependents(moduleDir string) []string {
+	absModule, err := filepath.Abs(moduleDir)
+	if err != nil {
+		return nil
+	}
+
+	var dependents []string
+	_ = filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() {
+			base := filepath.Base(path)
+			if base == ".terraform" || base == ".terragrunt-cache" || base == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if info.Name() != "terragrunt.hcl" {
+			return nil
+		}
+		source := extractTerragruntSource(path)
+		if source == "" {
+			return nil
+		}
+		unitDir := filepath.Dir(path)
+		resolved := filepath.Join(unitDir, source)
+		absResolved, err := filepath.Abs(resolved)
+		if err != nil {
+			return nil
+		}
+		if absResolved == absModule {
+			dependents = append(dependents, unitDir)
+		}
+		return nil
+	})
+	return dependents
+}
+
+// extractTerragruntSource reads a terragrunt.hcl file and extracts the
+// terraform source value. It uses simple line scanning rather than full
+// HCL parsing to avoid a heavy dependency.
+func extractTerragruntSource(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	inTerraform := false
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "terraform {" {
+			inTerraform = true
+			continue
+		}
+		if inTerraform {
+			if line == "}" {
+				break
+			}
+			if strings.HasPrefix(line, "source") {
+				// Extract quoted value: source = "..."
+				if idx := strings.Index(line, "\""); idx >= 0 {
+					end := strings.Index(line[idx+1:], "\"")
+					if end >= 0 {
+						return line[idx+1 : idx+1+end]
+					}
+				}
+			}
+		}
+	}
+	return ""
 }

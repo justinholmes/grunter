@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 
 	"github.com/justinholmes/grunter/internal/gitlab"
 	"github.com/justinholmes/grunter/internal/plan"
@@ -25,6 +26,8 @@ func init() {
 	commentCmd.Flags().String("mr-iid", "", "MR IID (default: CI_MERGE_REQUEST_IID)")
 	commentCmd.Flags().String("gitlab-url", "", "GitLab URL (default: CI_SERVER_URL or https://gitlab.com)")
 	commentCmd.Flags().String("env", "", "include environment name in comment header and marker")
+	commentCmd.Flags().String("commit-sha", "", "commit SHA for MR lookup fallback (default: CI_COMMIT_SHA)")
+	commentCmd.Flags().Bool("raw", false, "post content as-is without formatting (for pre-formatted markdown)")
 	rootCmd.AddCommand(commentCmd)
 }
 
@@ -47,7 +50,13 @@ func runComment(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	formatted := plan.FormatComment(unitPath, action, string(content))
+	raw, _ := cmd.Flags().GetBool("raw")
+	var formatted string
+	if raw {
+		formatted = string(content)
+	} else {
+		formatted = plan.FormatComment(unitPath, action, string(content))
+	}
 
 	projectID, _ := cmd.Flags().GetString("project-id")
 	if projectID == "" {
@@ -75,6 +84,26 @@ func runComment(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("GITLAB_TOKEN or CI_JOB_TOKEN must be set")
 	}
 
+	client := gitlab.NewClientWithTokenType(gitlabURL, token, tokenType)
+
+	// In post-merge pipelines, CI_MERGE_REQUEST_IID is unavailable.
+	// Fall back to looking up the MR from the commit SHA.
+	if mrIID == "" {
+		commitSHA, _ := cmd.Flags().GetString("commit-sha")
+		if commitSHA == "" {
+			commitSHA = os.Getenv("CI_COMMIT_SHA")
+		}
+		if commitSHA != "" {
+			mrs, err := client.GetMRsForCommit(projectID, commitSHA)
+			if err != nil {
+				return fmt.Errorf("looking up MR for commit %s: %w", commitSHA, err)
+			}
+			if len(mrs) > 0 {
+				mrIID = strconv.Itoa(mrs[0].IID)
+			}
+		}
+	}
+
 	if projectID == "" || mrIID == "" {
 		return fmt.Errorf("project-id and mr-iid are required (set flags or CI_PROJECT_ID/CI_MERGE_REQUEST_IID)")
 	}
@@ -86,7 +115,6 @@ func runComment(cmd *cobra.Command, args []string) error {
 		marker = "env:" + envName + ":" + unitPath
 	}
 
-	client := gitlab.NewClientWithTokenType(gitlabURL, token, tokenType)
 	if err := client.PostOrUpdateComment(projectID, mrIID, marker, formatted); err != nil {
 		return fmt.Errorf("posting comment: %w", err)
 	}

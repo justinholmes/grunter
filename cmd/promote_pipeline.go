@@ -112,7 +112,8 @@ func generatePipelineYAML(plan *ProgressiveDeploymentPlan, cfg *config.Config, c
 					fmt.Fprintf(&b, "    - grunter execute plan %q --config \"$GRUNTER_CONFIG\" -o plan-output.txt\n", unit.Path)
 					fmt.Fprintf(&b, "    - grunter plan-check --env %s --input plan-output.txt --config \"$GRUNTER_CONFIG\"\n", stage.Environment)
 				}
-				fmt.Fprintf(&b, "    - grunter execute apply %q --config \"$GRUNTER_CONFIG\"\n", unit.Path)
+				fmt.Fprintf(&b, "    - grunter execute apply %q --config \"$GRUNTER_CONFIG\" -o apply-output.txt\n", unit.Path)
+				fmt.Fprintf(&b, "    - grunter comment --input apply-output.txt --unit %q --action apply --env %q --config \"$GRUNTER_CONFIG\" || true\n", unit.Path, stage.Environment)
 				b.WriteString("\n")
 			}
 

@@ -259,8 +259,8 @@ ignore:
 	if !strings.Contains(formatted, "data/rds") {
 		t.Error("formatted output missing rds")
 	}
-	if !strings.Contains(formatted, "Changed") {
-		t.Error("formatted output missing status")
+	if !strings.Contains(formatted, ":arrows_counterclockwise:") {
+		t.Error("formatted output missing status icon for changed units")
 	}
 
 	// --- Step 7: Apply changes in dependency order ---

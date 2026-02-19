@@ -20,7 +20,7 @@ func TestFormatDiffMarkdown(t *testing.T) {
 		},
 		ContentDiffs: []ContentDiff{
 			{LogicalName: "us-east-1/vpc", Identical: true},
-			{LogicalName: "us-east-1/rds", Identical: false, Unified: "--- a\n+++ b\n@@ -1 +1 @@\n-dev\n+prod\n"},
+			{LogicalName: "us-east-1/rds", Identical: false, Unified: "--- a\n+++ b\n@@ -1 +1 @@\n-instance_type = \"t3.micro\"\n+instance_type = \"r5.large\"\n"},
 		},
 	}
 
@@ -68,6 +68,43 @@ func TestFormatDiffMarkdown_NoDifferences(t *testing.T) {
 
 	if strings.Contains(md, "Content differences") {
 		t.Error("should not show content differences section when all identical")
+	}
+}
+
+func TestFormatDiffMarkdown_FiltersEnvNameOnlyDiffs(t *testing.T) {
+	result := &EnvDiffResult{
+		SourceEnv: "staging",
+		TargetEnv: "production",
+		ContentDiffs: []ContentDiff{
+			{
+				LogicalName: "eu-west-1/routing/queues",
+				Identical:   false,
+				Unified:     "--- a\n+++ b\n@@ -1,3 +1,3 @@\n inputs = {\n-  environment = \"staging\"\n+  environment = \"production\"\n   region      = \"eu-west-1\"\n }\n",
+			},
+			{
+				LogicalName: "eu-west-1/routing/skills",
+				Identical:   false,
+				Unified:     "--- a\n+++ b\n@@ -1,2 +1,2 @@\n-instance_type = \"t3.micro\"\n+instance_type = \"r5.large\"\n",
+			},
+		},
+	}
+
+	md := FormatDiffMarkdown(result)
+
+	// The queues diff is env-name-only, should be counted as identical
+	if !strings.Contains(md, "Shared — identical | 1") {
+		t.Error("expected env-name-only diff to be counted as identical")
+	}
+	// The skills diff is a real difference
+	if !strings.Contains(md, "Shared — different | 1") {
+		t.Error("expected meaningful diff to be counted as different")
+	}
+	// Only the skills diff should appear in the content section
+	if strings.Contains(md, "routing/queues") {
+		t.Error("env-name-only diff should not appear in content differences")
+	}
+	if !strings.Contains(md, "routing/skills") {
+		t.Error("meaningful diff should appear in content differences")
 	}
 }
 

@@ -162,6 +162,63 @@ func TestDetect_EnvCommonChanges(t *testing.T) {
 	}
 }
 
+func TestDetect_SharedModuleChanges(t *testing.T) {
+	tmp := t.TempDir()
+
+	// Create a shared module with .tf files
+	moduleDir := filepath.Join(tmp, "modules/routing/queues")
+	os.MkdirAll(moduleDir, 0755)
+	os.WriteFile(filepath.Join(moduleDir, "main.tf"), []byte("resource \"null_resource\" \"q\" {}"), 0644)
+
+	// Create units that source from the shared module
+	units := []string{
+		"envs/staging/eu-west-1/routing/queues",
+		"envs/prod/eu-west-1/routing/queues",
+	}
+	for _, u := range units {
+		dir := filepath.Join(tmp, u)
+		os.MkdirAll(dir, 0755)
+		// source is a relative path from the unit to the module
+		rel, _ := filepath.Rel(dir, moduleDir)
+		hcl := "include \"root\" {\n  path = find_in_parent_folders(\"root.hcl\")\n}\n\nterraform {\n  source = \"" + rel + "\"\n}\n"
+		os.WriteFile(filepath.Join(dir, "terragrunt.hcl"), []byte(hcl), 0644)
+	}
+
+	origDir, _ := os.Getwd()
+	os.Chdir(tmp)
+	defer os.Chdir(origDir)
+
+	d := NewDetector(nil)
+	d.GitDiffFunc = func(base, head string) ([]string, error) {
+		return []string{
+			"modules/routing/queues/main.tf",
+		}, nil
+	}
+
+	changes, err := d.Detect("abc123", "def456")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(changes) != 2 {
+		t.Fatalf("expected 2 changes from shared module, got %d", len(changes))
+	}
+
+	found := make(map[string]bool)
+	for _, c := range changes {
+		found[c.UnitPath] = true
+		if c.Type != SourceChanged {
+			t.Errorf("expected SourceChanged for %s, got %s", c.UnitPath, c.Type)
+		}
+	}
+
+	for _, u := range units {
+		if !found[u] {
+			t.Errorf("expected unit %s to be detected", u)
+		}
+	}
+}
+
 func TestFilterIgnored(t *testing.T) {
 	d := &Detector{
 		ignorePatterns: []string{"**/README.md", "**/.terraform.lock.hcl"},
