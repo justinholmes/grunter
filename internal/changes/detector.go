@@ -303,7 +303,7 @@ func (d *Detector) findModuleDependents(moduleDir string) []string {
 		if info.Name() != "terragrunt.hcl" {
 			return nil
 		}
-		source := extractTerragruntSource(path)
+		source := ExtractTerragruntSource(path)
 		if source == "" {
 			return nil
 		}
@@ -321,10 +321,10 @@ func (d *Detector) findModuleDependents(moduleDir string) []string {
 	return dependents
 }
 
-// extractTerragruntSource reads a terragrunt.hcl file and extracts the
+// ExtractTerragruntSource reads a terragrunt.hcl file and extracts the
 // terraform source value. It uses simple line scanning rather than full
 // HCL parsing to avoid a heavy dependency.
-func extractTerragruntSource(path string) string {
+func ExtractTerragruntSource(path string) string {
 	f, err := os.Open(path)
 	if err != nil {
 		return ""

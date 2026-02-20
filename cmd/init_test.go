@@ -228,3 +228,92 @@ func TestGenerateGitLabCI_IDTokensInApproveJob(t *testing.T) {
 		t.Error("expected aud declaration in generated CI YAML")
 	}
 }
+
+func TestGenerateGitLabCI_ThreeEnvProgressiveDeployment(t *testing.T) {
+	cfg := &config.Config{
+		DeployBranch: "main",
+		TFBinary:     "tofu",
+		TGBinary:     "terragrunt",
+		Environments: []config.Environment{
+			{Name: "dev", Path: "envs/dev", Regions: []string{"eu-west-1"}},
+			{Name: "staging", Path: "envs/staging", Regions: []string{"eu-west-1"}},
+			{Name: "production", Path: "envs/production", Regions: []string{"eu-west-1", "eu-central-1", "ap-southeast-1"}},
+		},
+	}
+
+	output := generateGitLabCI(cfg, ".grunter/config.yml")
+
+	// Staging stages should appear
+	if !strings.Contains(output, "  - generate-staging\n") {
+		t.Error("expected generate-staging stage")
+	}
+	if !strings.Contains(output, "  - rollout-staging\n") {
+		t.Error("expected rollout-staging stage")
+	}
+
+	// Staging generate job should compare dev → staging
+	if !strings.Contains(output, "grunter promote --from dev --to staging") {
+		t.Error("expected staging promote from dev")
+	}
+
+	// Production generate should depend on rollout-staging
+	if !strings.Contains(output, "generate-production:\n") {
+		t.Error("expected generate-production job")
+	}
+
+	// Verify generate-production needs rollout-staging
+	genProdIdx := strings.Index(output, "generate-production:\n")
+	rolloutStagingRef := strings.Index(output[genProdIdx:], "- rollout-staging\n")
+	if rolloutStagingRef < 0 {
+		t.Error("expected generate-production to need rollout-staging")
+	}
+
+	// Production promote should compare staging → production
+	if !strings.Contains(output, "grunter promote --from staging --to production") {
+		t.Error("expected production promote from staging")
+	}
+
+	// Envdiff should compare dev vs production (first vs last)
+	if !strings.Contains(output, "grunter envdiff dev production") {
+		t.Error("expected envdiff dev production")
+	}
+}
+
+func TestGenerateGitLabCI_MultiRegionApproveRolloutSeparateStage(t *testing.T) {
+	cfg := &config.Config{
+		DeployBranch: "main",
+		TFBinary:     "tofu",
+		TGBinary:     "terragrunt",
+		Environments: []config.Environment{
+			{Name: "staging", Path: "envs/staging", Regions: []string{"eu-west-1"}},
+			{Name: "production", Path: "envs/production", Regions: []string{"eu-west-1", "eu-central-1"}},
+		},
+	}
+
+	output := generateGitLabCI(cfg, ".grunter/config.yml")
+
+	// approve-production-rollout must be its own stage, separate from rollout-production
+	if !strings.Contains(output, "  - approve-production-rollout\n") {
+		t.Error("expected approve-production-rollout as a separate stage in stages list")
+	}
+
+	// The approve:production-rollout job must use the approve-production-rollout stage
+	if !strings.Contains(output, "approve:production-rollout:\n  stage: approve-production-rollout\n") {
+		t.Error("expected approve:production-rollout job to use stage approve-production-rollout")
+	}
+
+	// The rollout-production job must use the rollout-production stage (not approve stage)
+	if !strings.Contains(output, "rollout-production:\n  stage: rollout-production\n") {
+		t.Error("expected rollout-production job to use stage rollout-production")
+	}
+
+	// Stage ordering: approve-production-rollout must come before rollout-production
+	approveStageIdx := strings.Index(output, "  - approve-production-rollout\n")
+	rolloutStageIdx := strings.Index(output, "  - rollout-production\n")
+	if approveStageIdx < 0 || rolloutStageIdx < 0 {
+		t.Fatal("could not find both stages in output")
+	}
+	if approveStageIdx >= rolloutStageIdx {
+		t.Error("approve-production-rollout stage must come before rollout-production stage")
+	}
+}

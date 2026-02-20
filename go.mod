@@ -1,6 +1,6 @@
 module github.com/justinholmes/grunter
 
-go 1.23.0
+go 1.23
 
 require (
 	github.com/hashicorp/hcl/v2 v2.24.0

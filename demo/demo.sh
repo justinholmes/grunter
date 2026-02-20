@@ -6,17 +6,18 @@
 # Demonstrates grunter managing multi-region Genesys Cloud contact center
 # infrastructure entirely through GitLab CI pipelines:
 #
-#   MR Pipeline:   change detection -> terragrunt plan -> MR comments
+#   MR Pipeline:   change detection -> lint -> terragrunt plan -> MR comments
 #   Post-Merge:    progressive deployment with canary gates
 #
 # Infrastructure layout:
-#   staging/eu-west-1          — staging environment (source)
-#   production/eu-west-1       — prod EU-West (canary)
+#   dev/eu-west-1              — dev environment (source)
+#   staging/eu-west-1          — staging environment (promotes from dev)
+#   production/eu-west-1       — prod EU-West (canary, promotes from staging)
 #   production/eu-central-1    — prod EU-Central
 #   production/ap-southeast-1  — prod APAC
 #
 # Prerequisites:
-#   - GitLab CE running on port 8929 (root / testpassword123!)
+#   - docker or podman (GitLab CE container is started automatically)
 #   - go, tofu, terragrunt, curl, jq installed
 #
 # Usage:
@@ -32,6 +33,11 @@ PROJECT_NAME="genesys-cloud-infra"
 PROJECT_PATH="root/$PROJECT_NAME"
 TOKEN_VALUE=""
 GRUNTER_REPO="$(cd "$(dirname "$0")/.." && pwd)"
+
+GITLAB_IMAGE="docker.io/gitlab/gitlab-ce:latest"
+CONTAINER_NAME="grunter-demo-gitlab"
+CONTAINER_RUNTIME=""
+STARTED_CONTAINER=""
 
 WORK_DIR=""
 PROJECT_ID=""
@@ -77,6 +83,91 @@ pause() {
     sleep 1
   fi
   echo ""
+}
+
+
+# ── Container Runtime ──────────────────────────────────────────────────
+detect_container_runtime() {
+  if command -v docker &>/dev/null; then
+    CONTAINER_RUNTIME="docker"
+  elif command -v podman &>/dev/null; then
+    CONTAINER_RUNTIME="podman"
+  else
+    die "Neither docker nor podman found. Install one to run the demo."
+  fi
+}
+
+start_gitlab() {
+  detect_container_runtime
+  info "Container runtime: $CONTAINER_RUNTIME"
+
+  # Check if container is already running
+  local running
+  running=$($CONTAINER_RUNTIME ps --filter "name=^${CONTAINER_NAME}$" --format "{{.ID}}" 2>/dev/null || true)
+  if [ -n "$running" ]; then
+    success "GitLab container already running, reusing"
+    return 0
+  fi
+
+  # Remove any stopped container with the same name
+  $CONTAINER_RUNTIME rm -f "$CONTAINER_NAME" &>/dev/null || true
+  # Wait for the name to be released
+  for _ in $(seq 1 10); do
+    local leftover
+    leftover=$($CONTAINER_RUNTIME ps -a --filter "name=^${CONTAINER_NAME}$" --format "{{.ID}}" 2>/dev/null || true)
+    if [ -z "$leftover" ]; then break; fi
+    sleep 1
+  done
+
+  info "Starting GitLab CE container (first run pulls ~2.5 GB image)..."
+  $CONTAINER_RUNTIME run -d \
+    --name "$CONTAINER_NAME" \
+    -p "${GITLAB_URL##*:}:80" \
+    -e "GITLAB_ROOT_PASSWORD=$GITLAB_PASSWORD" \
+    -e "GITLAB_SKIP_UNMIGRATED_DATA_CHECK=true" \
+    -e "GITLAB_OMNIBUS_CONFIG=gitlab_rails['initial_root_password']='$GITLAB_PASSWORD'; gitlab_rails['monitoring_whitelist']=['0.0.0.0/0']; prometheus_monitoring['enable']=false; sidekiq['concurrency']=2; puma['worker_processes']=2;" \
+    "$GITLAB_IMAGE" > /dev/null
+
+  STARTED_CONTAINER="$CONTAINER_NAME"
+  success "Container started: $CONTAINER_NAME"
+}
+
+wait_for_gitlab() {
+  local timeout=${1:-600}
+  local start_time
+  start_time=$(date +%s)
+
+  info "Waiting for GitLab to be ready (this can take 3-5 minutes)..."
+
+  while true; do
+    local elapsed=$(( $(date +%s) - start_time ))
+    if [ "$elapsed" -ge "$timeout" ]; then
+      die "GitLab did not become ready within ${timeout}s"
+    fi
+
+    # Try health endpoints
+    for endpoint in "/-/readiness?all=1" "/-/health" "/-/liveness"; do
+      local code
+      code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "${GITLAB_URL}${endpoint}" 2>/dev/null || echo "000")
+      if [ "$code" = "200" ]; then
+        echo ""
+        success "GitLab is ready! (${endpoint} returned 200)"
+        return 0
+      fi
+    done
+
+    # Fallback: API responding at all means GitLab is up
+    local api_code
+    api_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "${GITLAB_URL}/api/v4/version" 2>/dev/null || echo "000")
+    if [ "$api_code" = "200" ] || [ "$api_code" = "401" ]; then
+      echo ""
+      success "GitLab is ready! (API returned $api_code)"
+      return 0
+    fi
+
+    printf "\r  Waiting for GitLab... %ds elapsed  " "$elapsed"
+    sleep 10
+  done
 }
 
 # ── GitLab API ───────────────────────────────────────────────────────────────
@@ -257,6 +348,10 @@ drive_deployment_pipeline() {
           sleep 5
         else
           manual_wait=0
+          # Brief pause to let the played job transition out of manual status.
+          # Stage separation in the pipeline YAML ensures jobs can only be
+          # played in the correct order.
+          sleep 10
         fi
         ;;
       *)
@@ -341,6 +436,10 @@ ignore:
   - "**/README.md"
 
 environments:
+  - name: dev
+    path: envs/dev
+    regions:
+      - eu-west-1
   - name: staging
     path: envs/staging
     regions:
@@ -395,7 +494,7 @@ create_modules() {
   mkdir -p "$base/modules/routing/queues"
   cat > "$base/modules/routing/queues/main.tf" << 'MODEOF'
 variable "environment" { type = string }
-variable "region"      { type = string }
+variable "region" { type = string }
 
 resource "null_resource" "queue_sales" {
   triggers = {
@@ -432,7 +531,7 @@ MODEOF
   mkdir -p "$base/modules/routing/skills"
   cat > "$base/modules/routing/skills/main.tf" << 'MODEOF'
 variable "environment" { type = string }
-variable "region"      { type = string }
+variable "region" { type = string }
 
 resource "null_resource" "skill_1" {
   triggers = { name = "English", type = "language" }
@@ -451,7 +550,7 @@ MODEOF
   mkdir -p "$base/modules/flows/inbound-call"
   cat > "$base/modules/flows/inbound-call/main.tf" << 'MODEOF'
 variable "environment" { type = string }
-variable "region"      { type = string }
+variable "region" { type = string }
 
 resource "null_resource" "main_ivr" {
   triggers = {
@@ -466,7 +565,7 @@ MODEOF
   mkdir -p "$base/modules/users/agents"
   cat > "$base/modules/users/agents/main.tf" << 'MODEOF'
 variable "environment" { type = string }
-variable "region"      { type = string }
+variable "region" { type = string }
 
 resource "null_resource" "agent_group" {
   triggers = {
@@ -522,6 +621,11 @@ cleanup() {
     info "  Temp directory removed"
   fi
 
+  if [ -n "${STARTED_CONTAINER:-}" ]; then
+    info "  GitLab container '$STARTED_CONTAINER' left running for reuse."
+    info "  To stop it: ${CONTAINER_RUNTIME:-docker} rm -f $STARTED_CONTAINER"
+  fi
+
   success "Cleanup complete"
 }
 trap cleanup EXIT
@@ -549,18 +653,23 @@ step0_prerequisites() {
     die "Missing: ${missing[*]}"
   fi
 
-  # Check GitLab is reachable
-  if ! curl -s --max-time 5 "$GITLAB_URL/-/health" > /dev/null 2>&1; then
-    die "GitLab not reachable at $GITLAB_URL"
-  fi
-  success "GitLab CE reachable at $GITLAB_URL"
+  # Start GitLab container (or reuse existing) and wait for it
+  start_gitlab
+  wait_for_gitlab
 
   # Check / download gitlab-runner
   if ! command -v gitlab-runner &>/dev/null; then
     info "Downloading gitlab-runner..."
     mkdir -p "$HOME/.local/bin"
-    curl -L --output "$HOME/.local/bin/gitlab-runner" \
-      "https://s3.dualstack.us-east-1.amazonaws.com/gitlab-runner-downloads/latest/binaries/gitlab-runner-linux-amd64"
+    local os arch runner_url
+    os=$(uname -s | tr '[:upper:]' '[:lower:]')
+    arch=$(uname -m)
+    case "$arch" in
+      x86_64) arch="amd64" ;;
+      aarch64|arm64) arch="arm64" ;;
+    esac
+    runner_url="https://s3.dualstack.us-east-1.amazonaws.com/gitlab-runner-downloads/latest/binaries/gitlab-runner-${os}-${arch}"
+    curl -L --output "$HOME/.local/bin/gitlab-runner" "$runner_url"
     chmod +x "$HOME/.local/bin/gitlab-runner"
   fi
   success "gitlab-runner: $(command -v gitlab-runner)"
@@ -600,7 +709,7 @@ step2_gitlab_setup() {
     # Note: we don't revoke old tokens — previous pipelines may still be using them.
     info "Creating personal access token..."
     local expires_at
-    expires_at=$(date -d "+30 days" +%Y-%m-%d)
+    expires_at=$(date -v+30d +%Y-%m-%d 2>/dev/null || date -d "+30 days" +%Y-%m-%d)
     local pat_resp
     pat_resp=$(curl -s -X POST \
       -H "Authorization: Bearer $oauth_token" \
@@ -675,10 +784,13 @@ step3_create_infrastructure() {
   create_grunter_config "$WORK_DIR"
   create_modules "$WORK_DIR"
 
-  # Staging — EU West (single region)
+  # Dev — EU West (single region, source environment)
+  create_region "$WORK_DIR" dev eu-west-1
+
+  # Staging — EU West (single region, promotes from dev)
   create_region "$WORK_DIR" staging eu-west-1
 
-  # Production — 3 regions (canary = eu-west-1)
+  # Production — 3 regions (canary = eu-west-1, promotes from staging)
   create_region "$WORK_DIR" production eu-west-1
   create_region "$WORK_DIR" production eu-central-1
   create_region "$WORK_DIR" production ap-southeast-1
@@ -730,6 +842,11 @@ step4_push_baseline() {
   PROJECT_ID=$(echo "$project_resp" | jq -r '.id')
   success "GitLab project created: $GITLAB_URL/$PROJECT_PATH (ID: $PROJECT_ID)"
 
+  # Block merge button when pipeline fails (lint failures prevent deploys)
+  gitlab_api PUT "/projects/$PROJECT_ID" \
+    -d "only_allow_merge_if_pipeline_succeeds=true" || true
+  success "Merge guard enabled (pipelines must succeed)"
+
   # Set CI variables
   gitlab_api POST "/projects/$PROJECT_ID/variables" \
     -d "key=GITLAB_TOKEN&value=$TOKEN_VALUE" > /dev/null 2>&1
@@ -768,17 +885,18 @@ step5_feature_branch() {
   success "Branch: feature/add-premium-support-queue"
 
   # 1. Add Premium Support queue to the queues module
-  info "Adding Premium Support queue to module..."
+  #    (deliberately mis-formatted to trigger lint failure)
+  info "Adding Premium Support queue to module (with sloppy formatting)..."
   cat >> "$WORK_DIR/modules/routing/queues/main.tf" << 'MODEOF'
 
 resource "null_resource" "queue_premium_support" {
   triggers = {
-    name                      = "Premium Support"
-    description               = "Priority support for enterprise customers"
-    acw_timeout_ms            = "30000"
-    skill_evaluation_method   = "BEST"
-    enable_transcription      = "true"
-    service_level_pct         = "0.95"
+    name = "Premium Support"
+    description = "Priority support for enterprise customers"
+    acw_timeout_ms = "30000"
+    skill_evaluation_method = "BEST"
+    enable_transcription = "true"
+    service_level_pct = "0.95"
     service_level_duration_ms = "10000"
   }
 }
@@ -786,18 +904,18 @@ MODEOF
 
   # 2. Update IVR flow version in the flow module
   info "Updating IVR flow to route premium customers..."
-  sed -i 's/version = "1.0"/version = "2.0"/' \
+  sed -i '' 's/version = "1.0"/version = "2.0"/' \
     "$WORK_DIR/modules/flows/inbound-call/main.tf"
 
-  # 3. Add premium agent to the agents module
+  # 3. Add premium agent to the agents module (also mis-formatted)
   info "Adding premium support agent..."
   cat >> "$WORK_DIR/modules/users/agents/main.tf" << 'MODEOF'
 
 resource "null_resource" "premium_agent" {
   triggers = {
-    name       = "Premium Support Team"
+    name = "Premium Support Team"
     visibility = "MEMBERS"
-    skill      = "Premium"
+    skill = "Premium"
   }
 }
 MODEOF
@@ -823,17 +941,21 @@ step6_create_mr() {
   mr_resp=$(gitlab_api POST "/projects/$PROJECT_ID/merge_requests" \
     --data-urlencode "source_branch=feature/add-premium-support-queue" \
     --data-urlencode "target_branch=main" \
-    --data-urlencode "title=Add premium support queue to contact center")
+    --data-urlencode "title=Add premium support queue to contact center" \
+    --data-urlencode "description=## Changes
+- Add Premium Support queue with SLA targets (95% in 10s)
+- Update Main IVR flow to v2.0 for premium routing
+- Add Premium Support Team agent group")
   MR_IID=$(echo "$mr_resp" | jq -r '.iid')
   local mr_url
   mr_url=$(echo "$mr_resp" | jq -r '.web_url')
   success "MR !$MR_IID created: $mr_url"
 
-  pause "MR created. Pipeline will run: detect -> plan -> comment"
+  pause "MR created. Pipeline will run: detect -> lint -> plan -> comment"
 }
 
-step7_watch_mr_pipeline() {
-  section "Step 7: Watch MR pipeline (detect -> plan -> comment)"
+step7_watch_lint_fail() {
+  section "Step 7: Watch lint catch formatting issues"
 
   # Wait for MR pipeline to appear
   local pipeline_id
@@ -843,29 +965,71 @@ step7_watch_mr_pipeline() {
   local pipeline_url="$GITLAB_URL/$PROJECT_PATH/-/pipelines/$pipeline_id"
   info "MR pipeline: $pipeline_url"
 
-  # Wait for completion
+  # Wait for completion (expect failure)
   wait_for_pipeline_completion "$pipeline_id" 300 || true
 
-  # Show plan output from the detect job
-  show_job_log_excerpt "$pipeline_id" "detect" 15
+  # Show lint output
+  echo ""
+  show_job_log_excerpt "$pipeline_id" "lint" 30
   echo ""
 
-  # Show plan output from the plan job
+  # Show MR comments (lint report)
+  show_mr_notes "$MR_IID"
+
+  info "Lint failed — 'tofu fmt -check' caught the mis-aligned attributes"
+  info "Plan and envdiff were skipped (blocked by lint)"
+  info "Merge button is blocked until pipeline passes"
+  info "MR URL: $GITLAB_URL/$PROJECT_PATH/-/merge_requests/$MR_IID"
+
+  pause "Review the lint report on the MR. Next: fix formatting and re-push"
+}
+
+step8_fix_formatting() {
+  section "Step 8: Fix formatting and watch lint pass"
+
+  info "Running 'tofu fmt' to fix alignment..."
+  run_cmd "cd '$WORK_DIR' && tofu fmt modules/routing/queues/main.tf"
+  run_cmd "cd '$WORK_DIR' && tofu fmt modules/users/agents/main.tf"
+
+  info "Formatted diff:"
+  run_cmd "cd '$WORK_DIR' && git diff --stat"
+
+  (cd "$WORK_DIR" && git add -A && \
+    git commit -m "Fix terraform formatting") > /dev/null 2>&1
+  (cd "$WORK_DIR" && git push) > /dev/null 2>&1
+  success "Fix pushed"
+
+  # Wait for pipeline and show lint passing
+  sleep 5
+  local pipeline_id
+  pipeline_id=$(wait_for_pipeline_on_ref "feature/add-premium-support-queue" "merge_request_event" "$MR_PIPELINE_1_ID")
+  MR_PIPELINE_1_ID="$pipeline_id"
+
+  local pipeline_url="$GITLAB_URL/$PROJECT_PATH/-/pipelines/$pipeline_id"
+  info "Pipeline: $pipeline_url"
+
+  wait_for_pipeline_completion "$pipeline_id" 300 || true
+
+  # Show lint now passing
+  show_job_log_excerpt "$pipeline_id" "lint" 20
+  echo ""
+
+  # Show plan output
   show_job_log_excerpt "$pipeline_id" "plan" 40
   echo ""
 
-  # Show MR comments
+  # Show updated MR comments
   show_mr_notes "$MR_IID"
+  info "Lint report updated in-place (now green), plan comments posted"
 
-  info "MR URL: $GITLAB_URL/$PROJECT_PATH/-/merge_requests/$MR_IID"
-  pause "Review MR comments. Next: push an update and watch re-plan"
+  pause "Lint passes, plan ran. Next: push a config update"
 }
 
-step8_push_update() {
-  section "Step 8: Push update — increase premium queue ACW timeout"
+step9_push_update() {
+  section "Step 9: Push update — increase premium queue ACW timeout"
 
-  # Modify only the premium support queue (address range: from queue_premium_support to closing brace)
-  sed -i '/queue_premium_support/,/^}/s/acw_timeout_ms            = "30000"/acw_timeout_ms            = "45000"/' \
+  # Modify only the premium support queue
+  sed -i '' '/queue_premium_support/,/^}/s/acw_timeout_ms[[:space:]]*= "30000"/acw_timeout_ms            = "45000"/' \
     "$WORK_DIR/modules/routing/queues/main.tf"
 
   (cd "$WORK_DIR" && git add -A && \
@@ -876,8 +1040,8 @@ step8_push_update() {
   info "New pipeline will run — existing MR comments will be updated in-place"
 }
 
-step9_watch_replan() {
-  section "Step 9: Watch re-plan pipeline"
+step10_watch_replan() {
+  section "Step 10: Watch re-plan pipeline"
 
   sleep 5
   local pipeline_id
@@ -898,15 +1062,15 @@ step9_watch_replan() {
     jq -r '.[] | select(.name == "envdiff") | .id' 2>/dev/null || true)
   if [ -n "$envdiff_job_id" ] && [ "$envdiff_job_id" != "null" ]; then
     echo ""
-    info "Environment diff (staging vs production):"
+    info "Environment diff (dev vs production):"
     show_job_log_excerpt "$pipeline_id" "envdiff" 30
   fi
 
   pause "Re-plan complete. Next: merge and watch deployment pipeline"
 }
 
-step10_merge_and_deploy() {
-  section "Step 10: Merge MR & progressive deployment"
+step11_merge_and_deploy() {
+  section "Step 11: Merge MR & progressive deployment"
 
   # Cancel the baseline post-merge pipeline if still running
   if [ -n "$BASELINE_PIPELINE_ID" ] && [ "$BASELINE_PIPELINE_ID" != "null" ]; then
@@ -927,12 +1091,15 @@ step10_merge_and_deploy() {
   info "Post-merge deployment pipeline started"
   echo ""
   info "Pipeline flow:"
-  info "  1. generate-production     (compare staging vs production)"
-  info "  2. approve:production-deploy  (manual gate)"
-  info "  3. rollout-production-canary  (deploy eu-west-1 via child pipeline)"
-  info "  4. canary gate             (approve or rollback)"
-  info "  5. rollout-production      (deploy eu-central-1 + ap-southeast-1)"
-  info "  6. create-release          (tag the deployment)"
+  info "  1. generate-staging          (compare dev vs staging)"
+  info "  2. rollout-staging           (deploy staging via child pipeline)"
+  info "  3. generate-production       (compare staging vs production)"
+  info "  4. approve:production-deploy (manual gate)"
+  info "  5. rollout-production-canary (deploy eu-west-1 via child pipeline)"
+  info "  6. canary gate               (approve or rollback)"
+  info "  7. approve:production-rollout (manual gate)"
+  info "  8. rollout-production        (deploy eu-central-1 + ap-southeast-1)"
+  info "  9. create-release            (tag the deployment)"
   echo ""
 
   pause "Walk through the progressive deployment"
@@ -940,29 +1107,33 @@ step10_merge_and_deploy() {
   drive_deployment_pipeline "$pipeline_id"
 }
 
-step11_summary() {
-  section "Step 11: Summary"
+step12_summary() {
+  section "Step 12: Summary"
 
   echo -e "  ${BOLD}What we demonstrated:${NC}"
   echo ""
   echo "  1. Multi-region Genesys Cloud infrastructure managed with terragrunt"
   echo "     - Shared modules in modules/ sourced by each environment"
-  echo "     - staging (eu-west-1) and production (eu-west-1, eu-central-1, ap-southeast-1)"
+  echo "     - dev (eu-west-1), staging (eu-west-1), production (eu-west-1, eu-central-1, ap-southeast-1)"
   echo "     - Dependency ordering: queues/skills -> flows -> agents"
   echo ""
   echo "  2. Pipeline generation with 'grunter init'"
-  echo "     - MR pipeline: detect -> plan -> comment"
-  echo "     - Post-merge pipeline: promote -> canary -> full rollout"
+  echo "     - MR pipeline: detect -> lint -> plan -> comment"
+  echo "     - Post-merge pipeline: staging rollout -> production canary -> full rollout"
   echo ""
   echo "  3. MR pipeline (all through GitLab CI)"
   echo "     - Automatic change detection across environments"
+  echo "     - Lint checks: hclfmt, tofu fmt, validate, tflint"
+  echo "     - Lint failure blocks plan and merge (fast feedback)"
+  echo "     - Lint report posted to MR with pass/fail details"
   echo "     - Terragrunt plan for each changed unit"
   echo "     - Plan comments posted to MR (updated in-place on re-push)"
-  echo "     - Environment diff between staging and production"
+  echo "     - Environment diff between dev and production"
   echo ""
-  echo "  4. Progressive deployment with canary gates"
-  echo "     - 'grunter promote' generates child pipeline YAML"
-  echo "     - Canary region (eu-west-1) deploys first"
+  echo "  4. Progressive deployment: dev -> staging -> production"
+  echo "     - 'grunter promote' generates child pipeline YAML per environment"
+  echo "     - Staging deploys automatically after generate"
+  echo "     - Production: canary region (eu-west-1) deploys first"
   echo "     - Manual approval gate after canary validation"
   echo "     - Remaining regions (eu-central-1, ap-southeast-1) roll out"
   echo "     - Automatic release tagging on completion"
@@ -970,6 +1141,7 @@ step11_summary() {
   echo -e "  ${BOLD}Key grunter commands (all run inside the pipeline):${NC}"
   echo ""
   echo "    grunter orchestrate     Detect changes, output execution plan"
+  echo "    grunter lint            Run hclfmt, tofu fmt, validate, tflint on changed units"
   echo "    grunter execute plan    Run terragrunt plan on a unit"
   echo "    grunter comment         Post plan output to MR"
   echo "    grunter promote         Generate deployment plan + child pipeline YAML"
@@ -1002,11 +1174,12 @@ main() {
   step4_push_baseline
   step5_feature_branch
   step6_create_mr
-  step7_watch_mr_pipeline
-  step8_push_update
-  step9_watch_replan
-  step10_merge_and_deploy
-  step11_summary
+  step7_watch_lint_fail
+  step8_fix_formatting
+  step9_push_update
+  step10_watch_replan
+  step11_merge_and_deploy
+  step12_summary
 }
 
 main "$@"

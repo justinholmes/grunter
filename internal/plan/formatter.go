@@ -300,6 +300,55 @@ func formatCompactChanges(s *runner.PlanSummary) string {
 	return fmt.Sprintf("+%d ~%d -%d", s.ToAdd, s.ToChange, s.ToDestroy)
 }
 
+// DeploymentEnv holds information about an environment in the deployment summary.
+type DeploymentEnv struct {
+	Name       string
+	Regions    []string
+	UnitCount  int    // >0 means this env has direct changes
+	SourceName string // non-empty for promotion targets (e.g. "staging")
+}
+
+// FormatDeploymentSummary generates a markdown deployment summary showing
+// the full promotion chain. Environments with direct changes show unit counts;
+// downstream environments show "promoted from {source}".
+func FormatDeploymentSummary(envs []DeploymentEnv) string {
+	var sb strings.Builder
+	sb.WriteString("## Deployment Summary\n\n")
+	sb.WriteString("**Merging this MR will trigger a progressive deployment:**\n\n")
+
+	sb.WriteString("| Step | Environment | Region | Details |\n")
+	sb.WriteString("|------|-------------|--------|--------|\n")
+
+	step := 1
+	for _, env := range envs {
+		details := fmt.Sprintf("promoted from %s", env.SourceName)
+		if env.UnitCount > 0 {
+			details = fmt.Sprintf("%d units changed", env.UnitCount)
+		}
+
+		if len(env.Regions) <= 1 {
+			region := ""
+			if len(env.Regions) == 1 {
+				region = env.Regions[0]
+			}
+			sb.WriteString(fmt.Sprintf("| %d | %s | %s | %s |\n", step, env.Name, region, details))
+			step++
+		} else {
+			for i, region := range env.Regions {
+				label := region
+				if i == 0 {
+					label = region + " (canary)"
+				}
+				sb.WriteString(fmt.Sprintf("| %d | %s | %s | %s |\n", step, env.Name, label, details))
+				step++
+			}
+		}
+	}
+
+	sb.WriteString("\nEach environment is deployed sequentially with manual approval gates between stages.\n")
+	return sb.String()
+}
+
 func truncateOutput(output string, maxLen int) string {
 	if maxLen <= 0 {
 		maxLen = 10000
